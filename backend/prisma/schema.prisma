@@ -1,0 +1,247 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// Minimal models for SIH26033
+enum UserRole {
+  FARMER
+  FPO
+  BUYER
+  CONSUMER
+  ADMIN
+}
+
+enum Commodity {
+  TOMATO
+  ONION
+  POTATO
+  WHEAT
+  RICE
+  CORN
+  BRINJAL
+  LETTUCE
+  MANGO
+  APPLE
+  BANANA
+  OTHER
+}
+
+enum Grade {
+  GRADE_A
+  GRADE_B
+  GRADE_C
+  PREMIUM
+}
+
+enum ListingStatus {
+  ACTIVE
+  INACTIVE
+  SOLD
+}
+
+enum DemandStatus {
+  ACTIVE
+  MATCHED
+  COMPLETED
+  CANCELLED
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  IN_TRANSIT
+  DELIVERED
+  COMPLETED
+  CANCELLED
+}
+
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  password      String
+  role          UserRole
+  phone         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+model FarmerProfile {
+  id            String    @id @default(uuid())
+  userId        String    @unique
+  name          String
+  location      String
+  state         String
+  totalLandArea Decimal?  // in acres
+  crops         String[]
+  verificationStatus Boolean  @default(false)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+model BuyerProfile {
+  id            String    @id @default(uuid())
+  userId        String    @unique
+  name          String
+  organizationType String?  // "bulk_buyer", "retail_chain"
+  location      String
+  annualCapacity Decimal?  // in kg
+  verificationStatus Boolean  @default(false)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+model ConsumerProfile {
+  id            String    @id @default(uuid())
+  userId        String    @unique
+  name          String
+  email         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+model ProduceListing {
+  id            String    @id @default(uuid())
+  farmerId      String
+  commodity     Commodity
+  variety       String?
+  grade         Grade
+  quantity      Decimal
+  unit          String    @default("kg")
+  askingPrice   Decimal
+  location      String
+  state         String
+  status        ListingStatus  @default(ACTIVE)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+model BuyerDemand {
+  id            String    @id @default(uuid())
+  buyerId       String
+  commodity     Commodity
+  requiredQuantity Decimal
+  unit          String    @default("kg")
+  targetPrice   Decimal
+  status        DemandStatus  @default(ACTIVE)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+model Order {
+  id            String    @id @default(uuid())
+  buyerId       String
+  listingId     String?
+  quantity      Decimal
+  unit          String    @default("kg")
+  finalPrice    Decimal
+  transportCost Decimal  @default(0)
+  netRealization Decimal
+  status        OrderStatus    @default(PENDING)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+model OrderItem {
+  id            String    @id @default(uuid())
+  orderId       String
+  produceListingId String
+  quantity      Decimal
+  unit          String    @default("kg")
+  price         Decimal
+  createdAt     DateTime  @default(now())
+}
+
+model MarketPrice {
+  id            String    @id @default(uuid())
+  state         String
+  district      String
+  market        String
+  commodity     Commodity
+  modalPrice    Decimal
+  minPrice      Decimal
+  maxPrice      Decimal
+  source        String     @default("government_api")
+  fetchedAt     DateTime   @default(now())
+  validationStatus ValidationStatus  @default(VALID)
+  dataFreshness String     // "fresh", "stale", "unknown"
+
+  @@ index([commodity, state, market])
+}
+
+model MarketDataSync {
+  id            String    @id @default(uuid())
+  source        String     @default("government_api")
+  recordCount   Int        @default(0)
+  validCount    Int        @default(0)
+  suspiciousCount Int      @default(0)
+  failedCount   Int        @default(0)
+  status        SyncStatus @default(PENDING)
+  startedAt     DateTime   @default(now())
+  completedAt   DateTime?
+  errorMessage  String?
+  createdAt     DateTime   @default(now())
+}
+
+model Forecast {
+  id            String    @id @default(uuid())
+  commodity     Commodity
+  location      String
+  forecastHorizon String   // "next_7_days"
+  predictedDemand Decimal
+  confidenceScore Decimal  // 0-100
+  modelVersion  ForecastModelVersion  @default(DEMO)
+  generatedAt   DateTime  @default(now())
+  notes         String?   // "DEMO DATA" or explanation
+
+  @@ index([commodity, location, forecastHorizon])
+}
+
+model Route {
+  id            String    @id @default(uuid())
+  origin        String
+  destination   String
+  distanceKm    Decimal
+  estimatedTime String   // e.g., "45 min"
+  estimatedCost Decimal
+  vehicleType   String
+  status        String     @default("planned")
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+}
+
+
+enum ValidationStatus {
+  VALID
+  INVALID
+  SUSPICIOUS
+}
+
+enum SyncStatus {
+  PENDING
+  SUCCESS
+  FAILED
+}
+
+enum ForecastModelVersion {
+  DEMO
+  SYNTHETIC
+  REAL
+}
+
+model ImpactMetric {
+
+  id            String    @id @default(uuid())
+  metricType    String     // "farmers_connected", "orders_completed"
+  metricValue   Decimal
+  unit          String
+  periodStart   DateTime
+  periodEnd     DateTime
+  recordedAt    DateTime  @default(now())
+
+  @@ index([metricType, periodStart])
+}

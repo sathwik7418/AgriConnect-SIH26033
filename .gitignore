@@ -1,0 +1,39 @@
+# ─── Environment & secrets (NEVER commit) ──────────────────
+.env
+.env.*
+!.env.example
+
+# ─── Dependencies ───────────────────────────────────────────
+node_modules/
+
+# ─── Build outputs ──────────────────────────────────────────
+dist/
+build/
+coverage/
+frontend/dist/
+
+# ─── Generated code ─────────────────────────────────────────
+backend/generated/
+
+# ─── Logs ───────────────────────────────────────────────────
+*.log
+npm-debug.log*
+backend/logs/
+frontend/logs/
+
+# ─── OS / editor junk ───────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+
+# ─── AI assistant local config (not part of the app) ────────
+.claude/
+.windsurf/
+.agents/
+skills-lock.json
+
+# ─── Local runtime data (belongs in PostgreSQL, not Git) ────
+*.sql.gz
+*.dump
+*.csv.bak
+backups/
