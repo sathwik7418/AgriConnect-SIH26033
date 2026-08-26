@@ -132,6 +132,18 @@ export default function FarmerDashboard() {
         </button>
       </div>
 
+      {listings.length === 0 && (
+        <div className="bg-green-50 border border-green-200 rounded-xl p-6 text-center space-y-3">
+          <h2 className="text-lg font-bold text-green-950">🌾 Welcome to AgriConnect!</h2>
+          <p className="text-sm text-green-800 max-w-md mx-auto">
+            You haven't listed any produce yet. List your crops today to connect directly with bulk buyers, calculate transport fees, and increase your earnings.
+          </p>
+          <button onClick={() => setShowAdd(true)} className="bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-green-700">
+            Create Your First Listing
+          </button>
+        </div>
+      )}
+
       {/* Stats */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="bg-white rounded-xl p-5 border card-shadow">

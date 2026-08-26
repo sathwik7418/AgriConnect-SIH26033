@@ -77,9 +77,18 @@ app.get('/health', async (req, res) => {
   }
 });
 
+// Helper to generate secure random 6-digit OTP
+const crypto = require('crypto');
+function generateOTP() {
+  return crypto.randomInt(100000, 999999).toString();
+}
+
 // Auth routes
 app.post('/api/auth/register', async (req, res) => {
   const { email, password, role, phone } = req.body;
+  if (!email || !password || !role) {
+    return res.status(400).json({ error: 'Email, password, and role are required' });
+  }
   try {
     const existingUser = await query('SELECT id FROM users WHERE email = $1', [email]);
     if (existingUser.rows.length > 0) {
@@ -87,23 +96,156 @@ app.post('/api/auth/register', async (req, res) => {
     }
     
     const hashedPassword = await bcrypt.hash(password, 10);
+    
+    // Generate verification OTP
+    const rawOtp = generateOTP();
+    const hashedOtp = await bcrypt.hash(rawOtp, 10);
+    const otpExpires = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
+    const cooldown = new Date(Date.now() + 60 * 1000); // 60 seconds
+    
     const result = await query(
-      'INSERT INTO users (email, password, role, phone) VALUES ($1, $2, $3, $4) RETURNING id, email, role',
-      [email, hashedPassword, role || 'FARMER', phone]
+      `INSERT INTO users (email, password, role, phone, is_verified, verification_otp, otp_expires_at, otp_attempts, otp_cooldown_until) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id, email, role, is_verified`,
+      [email, hashedPassword, role, phone, false, hashedOtp, otpExpires, 0, cooldown]
     );
+
+    if (process.env.OTP_PROVIDER === 'twilio') {
+      console.log(`[Twilio OTP] Trigger SMS verification for ${phone || email}`);
+    } else {
+      console.log(`[DEV OTP MOCK] Generated OTP for ${email}: ${rawOtp}`);
+    }
     
     const token = jwt.sign({ userId: result.rows[0].id, role: result.rows[0].role }, JWT_SECRET, { expiresIn: '7d' });
-    res.status(201).json({ user: result.rows[0], token });
+    
+    const responsePayload = { 
+      user: result.rows[0], 
+      token,
+      message: 'Registration successful! Verification code sent.'
+    };
+    
+    if (process.env.NODE_ENV !== 'production') {
+      responsePayload.devOtp = rawOtp;
+    }
+    
+    res.status(201).json(responsePayload);
   } catch (error) {
     console.error('Registration error:', error);
     res.status(500).json({ error: 'Registration failed' });
   }
 });
 
+app.post('/api/auth/verify-otp', async (req, res) => {
+  const { email, otp } = req.body;
+  if (!email || !otp) {
+    return res.status(400).json({ error: 'Email and OTP are required' });
+  }
+  try {
+    const userRes = await query('SELECT * FROM users WHERE email = $1', [email]);
+    if (userRes.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    const user = userRes.rows[0];
+    
+    if (user.is_verified) {
+      return res.status(400).json({ error: 'Account is already verified' });
+    }
+    
+    if (!user.verification_otp || !user.otp_expires_at) {
+      return res.status(400).json({ error: 'No active verification code found' });
+    }
+    
+    if (new Date() > new Date(user.otp_expires_at)) {
+      return res.status(400).json({ error: 'Verification code has expired. Please request a new one.' });
+    }
+    
+    if (user.otp_attempts >= 3) {
+      return res.status(400).json({ error: 'Too many incorrect attempts. This code has been invalidated. Please request a new one.' });
+    }
+    
+    // Increment attempts
+    await query('UPDATE users SET otp_attempts = otp_attempts + 1 WHERE id = $1', [user.id]);
+    
+    const isValid = await bcrypt.compare(otp.toString(), user.verification_otp);
+    if (!isValid) {
+      const remaining = 2 - user.otp_attempts;
+      if (remaining <= 0) {
+        // Invalidate OTP
+        await query('UPDATE users SET verification_otp = NULL, otp_expires_at = NULL WHERE id = $1', [user.id]);
+        return res.status(400).json({ error: 'Too many incorrect attempts. This code has been invalidated.' });
+      }
+      return res.status(400).json({ error: `Invalid verification code. ${remaining} attempts remaining.` });
+    }
+    
+    // Verification successful
+    await query(
+      'UPDATE users SET is_verified = TRUE, verification_otp = NULL, otp_expires_at = NULL, otp_attempts = 0 WHERE id = $1',
+      [user.id]
+    );
+    
+    const token = jwt.sign({ userId: user.id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+    res.json({ 
+      success: true, 
+      user: { id: user.id, email: user.email, role: user.role, is_verified: true }, 
+      token 
+    });
+  } catch (error) {
+    console.error('Verify OTP error:', error);
+    res.status(500).json({ error: 'Verification failed' });
+  }
+});
+
+app.post('/api/auth/resend-otp', async (req, res) => {
+  const { email } = req.body;
+  if (!email) {
+    return res.status(400).json({ error: 'Email is required' });
+  }
+  try {
+    const userRes = await query('SELECT * FROM users WHERE email = $1', [email]);
+    if (userRes.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    const user = userRes.rows[0];
+    
+    if (user.is_verified) {
+      return res.status(400).json({ error: 'Account is already verified' });
+    }
+    
+    if (user.otp_cooldown_until && new Date() < new Date(user.otp_cooldown_until)) {
+      const waitSec = Math.ceil((new Date(user.otp_cooldown_until) - new Date()) / 1000);
+      return res.status(429).json({ error: `Please wait ${waitSec} seconds before requesting another code.` });
+    }
+    
+    const rawOtp = generateOTP();
+    const hashedOtp = await bcrypt.hash(rawOtp, 10);
+    const otpExpires = new Date(Date.now() + 5 * 60 * 1000);
+    const cooldown = new Date(Date.now() + 60 * 1000);
+    
+    await query(
+      'UPDATE users SET verification_otp = $1, otp_expires_at = $2, otp_attempts = 0, otp_cooldown_until = $3 WHERE id = $4',
+      [hashedOtp, otpExpires, cooldown, user.id]
+    );
+    
+    if (process.env.OTP_PROVIDER === 'twilio') {
+      console.log(`[Twilio OTP] Resend SMS verification for ${user.phone || email}`);
+    } else {
+      console.log(`[DEV OTP MOCK] Resent OTP for ${email}: ${rawOtp}`);
+    }
+    
+    const responsePayload = { success: true, message: 'Verification code resent successfully.' };
+    if (process.env.NODE_ENV !== 'production') {
+      responsePayload.devOtp = rawOtp;
+    }
+    res.json(responsePayload);
+  } catch (error) {
+    console.error('Resend OTP error:', error);
+    res.status(500).json({ error: 'Failed to resend verification code' });
+  }
+});
+
 app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body;
   try {
-    const result = await query('SELECT id, email, password, role FROM users WHERE email = $1', [email]);
+    const result = await query('SELECT id, email, password, role, is_verified FROM users WHERE email = $1', [email]);
     if (result.rows.length === 0) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
@@ -114,8 +256,12 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
     
+    if (!user.is_verified) {
+      return res.status(403).json({ error: 'Account not verified. Please verify your account first.' });
+    }
+    
     const token = jwt.sign({ userId: user.id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
-    res.json({ user: { id: user.id, email: user.email, role: user.role }, token });
+    res.json({ user: { id: user.id, email: user.email, role: user.role, is_verified: true }, token });
   } catch (error) {
     console.error('Login error:', error);
     res.status(500).json({ error: 'Login failed' });
@@ -322,6 +468,9 @@ app.get('/api/listings/commodity/:commodity', async (req, res) => {
 });
 
 app.get('/api/listings/farmer/:farmerId', authenticate, async (req, res) => {
+  if (req.userRole !== 'ADMIN' && req.profileId !== req.params.farmerId) {
+    return res.status(403).json({ error: 'Access forbidden: You can only view your own listings' });
+  }
   try {
     const result = await query(
       'SELECT * FROM produce_listings WHERE farmer_id = $1 ORDER BY created_at DESC',
@@ -337,6 +486,14 @@ app.get('/api/listings/farmer/:farmerId', authenticate, async (req, res) => {
 app.put('/api/listings/:id', authenticate, async (req, res) => {
   const { status, askingPrice, quantity } = req.body;
   try {
+    const checkRes = await query('SELECT farmer_id FROM produce_listings WHERE id = $1', [req.params.id]);
+    if (checkRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Listing not found' });
+    }
+    if (req.userRole !== 'ADMIN' && checkRes.rows[0].farmer_id !== req.profileId) {
+      return res.status(403).json({ error: 'Access forbidden: You do not own this listing' });
+    }
+
     const updates = [];
     const values = [];
     let paramCount = 1;
@@ -439,6 +596,9 @@ app.get('/api/demands/commodity/:commodity', async (req, res) => {
 });
 
 app.get('/api/demands/buyer/:buyerId', authenticate, async (req, res) => {
+  if (req.userRole !== 'ADMIN' && req.profileId !== req.params.buyerId) {
+    return res.status(403).json({ error: 'Access forbidden: You can only view your own demands' });
+  }
   try {
     const result = await query(
       'SELECT * FROM buyer_demands WHERE buyer_id = $1 ORDER BY created_at DESC',
@@ -542,6 +702,9 @@ app.post('/api/orders', authenticate, async (req, res) => {
 });
 
 app.get('/api/orders/buyer/:buyerId', authenticate, async (req, res) => {
+  if (req.userRole !== 'ADMIN' && req.profileId !== req.params.buyerId) {
+    return res.status(403).json({ error: 'Access forbidden: You can only view your own orders' });
+  }
   try {
     const result = await query(
       `SELECT o.*, l.commodity, l.variety, l.grade, l.location as listing_location,
@@ -561,6 +724,9 @@ app.get('/api/orders/buyer/:buyerId', authenticate, async (req, res) => {
 });
 
 app.get('/api/orders/farmer/:farmerId', authenticate, async (req, res) => {
+  if (req.userRole !== 'ADMIN' && req.profileId !== req.params.farmerId) {
+    return res.status(403).json({ error: 'Access forbidden: You can only view your own orders' });
+  }
   try {
     const result = await query(
       `SELECT o.*, l.commodity, l.variety, l.grade, l.quantity as listed_quantity, 
@@ -721,7 +887,7 @@ app.get('/api/market-prices/latest', async (req, res) => {
   try {
     const result = await query(
       `SELECT DISTINCT ON (commodity, state, district) 
-       commodity, state, district, market, modal_price, min_price, max_price, fetched_at
+       commodity, state, district, market, modal_price, min_price, max_price, fetched_at, source
        FROM market_prices 
        ORDER BY commodity, state, district, fetched_at DESC`
     );
@@ -919,7 +1085,7 @@ app.get('/api/forecasts', async (req, res) => {
                92::text as confidence_score,
                'HISTORICAL' as model_version,
                NOW() as generated_at,
-               CONCAT('Avg Modal Price: Rs ', ROUND(AVG(modal_price)::numeric, 1), '/kg from ', COUNT(*), ' records') as notes,
+               CONCAT('Avg Modal Price: Rs ', ROUND((AVG(modal_price) / 100)::numeric, 1), '/kg from ', COUNT(*), ' records') as notes,
                'historical_dataset' as data_source
         FROM historical_market_prices 
         WHERE 1=1`;

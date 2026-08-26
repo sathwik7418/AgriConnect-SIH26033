@@ -46,20 +46,25 @@ class RoutingProvider {
     if (!locationStr) return null;
     const clean = locationStr.toLowerCase().trim();
     
+    // Validate garbage input (less than 3 characters or containing no letters)
+    if (clean.length < 3 || !/[a-z]/.test(clean)) {
+      return null;
+    }
+    
     // 1. Exact match lookup
     if (locationCoords[clean]) {
-      return locationCoords[clean];
+      return { ...locationCoords[clean], isFallback: false };
     }
     
     // 2. Contains match lookup
     for (const [city, coords] of Object.entries(locationCoords)) {
       if (clean.includes(city) || city.includes(clean)) {
-        return coords;
+        return { ...coords, isFallback: false };
       }
     }
     
-    // 3. Fail safe default fallback (Pune)
-    return locationCoords['pune'];
+    // 3. Fail safe default fallback (Pune) marked as fallback
+    return { ...locationCoords['pune'], isFallback: true };
   }
 
   async getRoute(origin, destination) {
@@ -182,15 +187,17 @@ class RoutingProvider {
     if (!origin || !destination) {
       return {
         success: false,
-        error: `Could not geocode locations. Origin: ${originName}, Destination: ${destinationName}`
+        error: `Could not geocode locations. Origin: ${originName || 'missing'}, Destination: ${destinationName || 'missing'}`
       };
     }
     
+    const isFallback = origin.isFallback || destination.isFallback;
     const result = await this.getRoute(origin, destination);
-    if (result.success) {
+    if (result.success && result.route) {
       const distance = result.route.distanceKm;
       // Calculate cost: Rs 9.5 per km, minimum Rs 300
       result.route.estimatedCost = Math.max(300, Math.round(distance * 9.5));
+      result.route.isFallback = isFallback;
     }
     return result;
   }
@@ -198,11 +205,25 @@ class RoutingProvider {
   _httpGet(url) {
     return new Promise((resolve, reject) => {
       const client = url.startsWith('https') ? https : http;
-      const req = client.get(url, { timeout: 10000 }, (res) => {
+      const parsed = new URL(url);
+      const options = {
+        hostname: parsed.hostname,
+        path: parsed.pathname + parsed.search,
+        headers: {
+          'User-Agent': 'AgriConnect-SIH26033/1.0 (Contact: vamshi@agriconnect.org)'
+        },
+        timeout: 10000
+      };
+      
+      const req = client.get(options, (res) => {
         let body = '';
         res.on('data', chunk => body += chunk);
         res.on('end', () => {
-          try { resolve(JSON.parse(body)); } catch (e) { reject(new Error('Invalid JSON from routing API')); }
+          try { 
+            resolve(JSON.parse(body)); 
+          } catch (e) { 
+            reject(new Error(`Invalid JSON from routing API: status ${res.statusCode}. Body: ${body.substring(0, 200)}`)); 
+          }
         });
       });
       req.on('error', reject);

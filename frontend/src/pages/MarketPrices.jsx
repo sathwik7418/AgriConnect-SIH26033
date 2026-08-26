@@ -262,9 +262,9 @@ export default function MarketPrices() {
                       <td className="px-4 py-2.5">
                         <span className="px-2 py-0.5 rounded-full bg-green-50 text-green-700 text-xs font-medium">{p.commodity}</span>
                       </td>
-                      <td className="px-4 py-2.5 text-green-600 font-medium font-numeric">Rs{parseFloat(p.min_price).toLocaleString()}</td>
-                      <td className="px-4 py-2.5 font-bold font-numeric">Rs{parseFloat(p.modal_price).toLocaleString()}</td>
-                      <td className="px-4 py-2.5 text-red-600 font-numeric">Rs{parseFloat(p.max_price).toLocaleString()}</td>
+                      <td className="px-4 py-2.5 text-green-600 font-medium font-numeric">{pricing.minText}</td>
+                      <td className="px-4 py-2.5 font-bold font-numeric">{pricing.modalText}</td>
+                      <td className="px-4 py-2.5 text-red-600 font-numeric">{pricing.maxText}</td>
                       <td className="px-4 py-2.5 text-gray-500 text-xs">{pricing.unit}</td>
                       <td className="px-4 py-2.5">
                         <span className={`px-2 py-0.5 text-xs rounded-full font-medium ${

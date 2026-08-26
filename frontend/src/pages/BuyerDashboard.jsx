@@ -3,6 +3,8 @@ import { useAuth } from '../context/AuthContext';
 import { demandAPI, listingAPI, orderAPI, dashboardAPI, supplyDemandAPI } from '../services/api';
 import { Plus, ShoppingCart, TrendingDown, Clock, CheckCircle, Search, MapPin, X, Info } from 'lucide-react';
 
+const cropOptions = ['TOMATO', 'ONION', 'POTATO', 'WHEAT', 'RICE', 'CORN', 'BRINJAL', 'LETTUCE', 'MANGO', 'APPLE', 'BANANA'];
+
 export default function BuyerDashboard() {
   const { user, profile } = useAuth();
   const [stats, setStats] = useState({});
@@ -152,6 +154,23 @@ export default function BuyerDashboard() {
           <Plus className="h-4 w-4" /> Create Demand
         </button>
       </div>
+
+      {demands.length === 0 && (
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-6 text-center space-y-3">
+          <h2 className="text-lg font-bold text-blue-950">🛒 Welcome to AgriConnect!</h2>
+          <p className="text-sm text-blue-800 max-w-md mx-auto">
+            You haven't placed any orders or created purchase demands yet. Create a demand to request matches, or check the marketplace to buy crops directly.
+          </p>
+          <div className="flex justify-center gap-2">
+            <button onClick={() => setShowDemand(true)} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-blue-700">
+              Create Your First Demand
+            </button>
+            <a href="/marketplace" className="bg-white border border-gray-300 text-gray-700 px-4 py-2 rounded-lg text-sm font-semibold hover:bg-gray-50 flex items-center">
+              Explore Marketplace
+            </a>
+          </div>
+        </div>
+      )}
 
       {/* Stats */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -419,6 +438,11 @@ export default function BuyerDashboard() {
                   <h4 className="font-bold flex items-center gap-1 text-blue-950 text-xs">
                     🚚 OSRM Road Route Estimate
                   </h4>
+                  {routeEstimate.isFallback && (
+                    <div className="bg-amber-100 border border-amber-200 text-amber-900 px-2 py-1 rounded text-[10px] font-semibold flex items-center gap-1 my-1.5">
+                      ⚠️ Estimated using location fallback
+                    </div>
+                  )}
                   <div className="grid grid-cols-3 gap-2 text-xs border-b border-blue-100 pb-2 mb-2">
                     <div>📍 Distance: <span className="font-bold">{routeEstimate.distanceKm} km</span></div>
                     <div>⏱ Time: <span className="font-bold">{routeEstimate.estimatedTime}</span></div>

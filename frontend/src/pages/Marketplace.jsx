@@ -300,6 +300,11 @@ export default function Marketplace() {
                   <h4 className="font-bold flex items-center gap-1 text-blue-950 text-xs">
                     🚚 OSRM Road Route Estimate
                   </h4>
+                  {routeEstimate.isFallback && (
+                    <div className="bg-amber-100 border border-amber-200 text-amber-900 px-2 py-1 rounded text-[10px] font-semibold flex items-center gap-1 my-1.5">
+                      ⚠️ Estimated using location fallback
+                    </div>
+                  )}
                   <div className="grid grid-cols-3 gap-2 text-xs border-b border-blue-100 pb-2 mb-2">
                     <div>📍 Distance: <span className="font-bold">{routeEstimate.distanceKm} km</span></div>
                     <div>⏱ Time: <span className="font-bold">{routeEstimate.estimatedTime}</span></div>

@@ -37,7 +37,9 @@ export default function Dashboard() {
   const statePriceData = {};
   prices.forEach(p => {
     if (!statePriceData[p.state]) statePriceData[p.state] = { state: p.state, prices: [] };
-    statePriceData[p.state].prices.push(parseFloat(p.modal_price));
+    const isQuintal = p.source === 'mandi_api' || p.source === 'historical_dataset' || p.source === 'agmarknet_historical';
+    const pricePerKg = isQuintal ? parseFloat(p.modal_price) / 100 : parseFloat(p.modal_price);
+    statePriceData[p.state].prices.push(pricePerKg);
   });
   const avgPricesByState = Object.values(statePriceData).map(d => ({
     state: d.state.split(' ').slice(0, 2).join(' '),
