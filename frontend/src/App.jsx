@@ -10,6 +10,7 @@ import Login from './pages/Login';
 import Register from './pages/Register';
 import FarmerDashboard from './pages/FarmerDashboard';
 import BuyerDashboard from './pages/BuyerDashboard';
+import AdminDashboard from './pages/AdminDashboard';
 import Onboarding from './pages/Onboarding';
 import Orders from './pages/Orders';
 
@@ -39,6 +40,7 @@ function AppRoutes() {
         <Route index element={
           user?.role === 'FARMER' ? <FarmerDashboard /> :
           user?.role === 'BUYER' ? <BuyerDashboard /> :
+          user?.role === 'ADMIN' ? <AdminDashboard /> :
           <Dashboard />
         } />
         <Route path="marketplace" element={<Marketplace />} />

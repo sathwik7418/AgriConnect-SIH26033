@@ -146,27 +146,35 @@ export default function Dashboard() {
                 <p className="text-sm">No forecast data available</p>
                 <p className="text-xs mt-1">Load historical market data to enable forecasting</p>
               </div>
-            ) : forecasts.map(f => (
-              <div key={f.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                <div>
-                  <p className="font-medium text-sm">{f.commodity} in {f.location}</p>
-                  <p className="text-xs text-gray-500">{f.notes}</p>
-                </div>
-                <div className="text-right">
-                  <p className="font-semibold text-blue-700">{parseInt(f.predicted_demand).toLocaleString()} kg</p>
-                  <div className="flex items-center gap-1.5 justify-end">
-                    {f.model_version === 'HISTORICAL' || f.data_source === 'historical_dataset' ? (
-                      <span className="px-1.5 py-0.5 text-[10px] rounded bg-blue-100 text-blue-700 font-semibold">HISTORICAL</span>
-                    ) : f.model_version === 'DEMO' || f.model_version === 'SYNTHETIC' || f.data_source === 'seed_demo' ? (
-                      <span className="px-1.5 py-0.5 text-[10px] rounded bg-amber-100 text-amber-700 font-medium">DEMO</span>
-                    ) : (
-                      <span className="px-1.5 py-0.5 text-[10px] rounded bg-green-100 text-green-700 font-medium">LIVE</span>
-                    )}
-                    <p className="text-xs text-gray-400">{f.confidence_score ? `${f.confidence_score}%` : 'N/A'} conf.</p>
+            ) : forecasts.map(f => {
+              const isHistorical = f.model_version === 'HISTORICAL' || f.data_source === 'historical_dataset';
+              return (
+                <div key={f.id || f.commodity} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                  <div>
+                    <p className="font-semibold text-sm">{f.commodity} in {f.location}</p>
+                    <p className="text-xs text-gray-500 font-medium">
+                      {isHistorical ? '📊 Historical Trend Projection' : '⚠️ Demo Forecast'}
+                    </p>
+                    <p className="text-[10px] text-gray-400 mt-0.5">
+                      {isHistorical 
+                        ? `Based on AGMARKNET historical market records. ${f.notes || ''}` 
+                        : 'Not a live ML prediction (simulated)'}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="font-bold text-blue-700 font-numeric">{parseInt(f.predicted_demand).toLocaleString()} kg</p>
+                    <div className="flex items-center gap-1.5 justify-end">
+                      <span className={`px-1.5 py-0.5 text-[9px] font-bold rounded uppercase ${
+                        isHistorical ? 'bg-blue-100 text-blue-700 border border-blue-200' : 'bg-amber-100 text-amber-800 border border-amber-200'
+                      }`}>
+                        {isHistorical ? 'Historical Trend' : 'Simulated Demo'}
+                      </span>
+                      <p className="text-xs text-gray-400 font-numeric">{f.confidence_score ? `${f.confidence_score}%` : 'N/A'} conf.</p>
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       </div>

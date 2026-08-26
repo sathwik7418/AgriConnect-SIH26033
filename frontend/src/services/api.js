@@ -109,4 +109,9 @@ export const configAPI = {
   getStatus: () => api.get('/config/status'),
 };
 
+// Admin API
+export const adminAPI = {
+  getStats: () => api.get('/admin/stats'),
+};
+
 export default api;

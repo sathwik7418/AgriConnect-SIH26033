@@ -36,6 +36,12 @@ class RoutingProvider {
     this.apiUrl = process.env.ROUTING_API_URL;
   }
 
+  isConfigured() {
+    // OSRM requires no API key and is always ready as a public fallback. Others need an apiKey.
+    if (this.provider === 'osrm') return true;
+    return !!this.apiKey;
+  }
+
   geocode(locationStr) {
     if (!locationStr) return null;
     const clean = locationStr.toLowerCase().trim();

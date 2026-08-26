@@ -732,8 +732,69 @@ app.get('/api/market-prices/latest', async (req, res) => {
   }
 });
 
+// Admin statistics cockpit
+app.get('/api/admin/stats', authenticate, async (req, res) => {
+  if (req.userRole !== 'ADMIN') {
+    return res.status(403).json({ error: 'Access forbidden: Admin access only' });
+  }
+  try {
+    const totalUsers = await query('SELECT COUNT(*) as count FROM users');
+    const farmers = await query('SELECT COUNT(*) as count FROM farmer_profiles');
+    const buyers = await query('SELECT COUNT(*) as count FROM buyer_profiles');
+    const consumers = await query('SELECT COUNT(*) as count FROM consumer_profiles');
+
+    const activeListings = await query("SELECT COUNT(*) as count FROM produce_listings WHERE listing_status = 'ACTIVE'");
+    const totalOrders = await query('SELECT COUNT(*) as count FROM orders');
+    const completedOrders = await query("SELECT COUNT(*) as count FROM orders WHERE order_status = 'COMPLETED'");
+    const totalValue = await query("SELECT COALESCE(SUM(final_price * quantity), 0) as total FROM orders WHERE order_status = 'COMPLETED'");
+
+    const mandiCount = await query("SELECT COUNT(*) as count FROM market_prices WHERE source = 'mandi_api'");
+    const govCount = await query("SELECT COUNT(*) as count FROM market_prices WHERE source = 'government_api'");
+    const histCount = await query("SELECT COUNT(*) as count FROM historical_market_prices");
+    const latestSync = await query("SELECT MAX(completed_at) as completed_at FROM market_data_sync WHERE sync_status = 'SUCCESS'");
+
+    const minMaxDate = await query("SELECT MIN(arrival_date) as min_date, MAX(arrival_date) as max_date FROM historical_market_prices");
+
+    res.json({
+      users: {
+        total: parseInt(totalUsers.rows[0].count),
+        farmers: parseInt(farmers.rows[0].count),
+        buyers: parseInt(buyers.rows[0].count),
+        consumers: parseInt(consumers.rows[0].count)
+      },
+      marketplace: {
+        activeListings: parseInt(activeListings.rows[0].count),
+        totalOrders: parseInt(totalOrders.rows[0].count),
+        completedOrders: parseInt(completedOrders.rows[0].count),
+        totalValue: parseFloat(totalValue.rows[0].total)
+      },
+      marketData: {
+        mandiCount: parseInt(mandiCount.rows[0].count),
+        govCount: parseInt(govCount.rows[0].count),
+        histCount: parseInt(histCount.rows[0].count),
+        latestSync: latestSync.rows[0].completed_at
+      },
+      historicalData: {
+        count: parseInt(histCount.rows[0].count),
+        minDate: minMaxDate.rows[0].min_date,
+        maxDate: minMaxDate.rows[0].max_date
+      },
+      logistics: {
+        provider: process.env.ROUTING_PROVIDER || 'osrm',
+        configured: routingProvider.isConfigured()
+      }
+    });
+  } catch (error) {
+    console.error('Get admin stats error:', error);
+    res.status(500).json({ error: 'Failed to fetch admin statistics' });
+  }
+});
+
 // Market data sync
-app.post('/api/market-data/sync', async (req, res) => {
+app.post('/api/market-data/sync', authenticate, async (req, res) => {
+  if (req.userRole !== 'ADMIN') {
+    return res.status(403).json({ error: 'Access forbidden: Admin access only' });
+  }
   try {
     const syncResult = await query(
       'INSERT INTO market_data_sync (source, sync_status) VALUES ($1, $2) RETURNING *',

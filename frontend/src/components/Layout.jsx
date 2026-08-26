@@ -38,6 +38,13 @@ export default function Layout() {
         { path: '/logistics', label: 'Logistics', icon: Truck },
         { path: '/impact', label: 'Impact', icon: Activity },
       ];
+    } else if (role === 'ADMIN') {
+      return [
+        { path: '/', label: 'Dashboard', icon: Home },
+        { path: '/prices', label: 'Market Prices', icon: BarChart3 },
+        { path: '/logistics', label: 'Logistics', icon: Truck },
+        { path: '/impact', label: 'Impact', icon: Activity },
+      ];
     } else if (role === 'CONSUMER') {
       return [
         { path: '/marketplace', label: 'Marketplace', icon: ShoppingCart },

@@ -13,6 +13,23 @@ const statusColors = {
   CANCELLED: 'text-gray-600 bg-gray-50 border-gray-200',
 };
 
+const statusLabels = {
+  PENDING: '🕐 Order Placed',
+  CONFIRMED: '✅ Order Accepted',
+  IN_TRANSIT: '🚚 Shipped',
+  DELIVERED: '📍 Delivered',
+  COMPLETED: '✅ Completed',
+  CANCELLED: '❌ Cancelled'
+};
+
+const stepLabels = {
+  PENDING: 'Placed',
+  CONFIRMED: 'Accepted',
+  IN_TRANSIT: 'Shipped',
+  DELIVERED: 'Delivered',
+  COMPLETED: 'Completed'
+};
+
 export default function Orders() {
   const { user, profile } = useAuth();
   const [orders, setOrders] = useState([]);
@@ -94,7 +111,7 @@ export default function Orders() {
                   </div>
                   <div className="flex flex-col items-end gap-1.5">
                     <span className={`px-3 py-1 text-xs font-bold rounded-full border ${statusColors[o.order_status]}`}>
-                      {o.order_status}
+                      {statusLabels[o.order_status] || o.order_status}
                     </span>
                     <span className="text-sm font-semibold text-gray-700 font-numeric">
                       Total: Rs{(parseFloat(o.final_price) * parseFloat(o.quantity)).toLocaleString()}
@@ -154,7 +171,7 @@ export default function Orders() {
                               {isDone ? <Check className="h-3.5 w-3.5 font-bold" /> : <span className="text-xs">{idx + 1}</span>}
                             </div>
                             <span className={`text-[10px] font-semibold mt-2 hidden md:block ${isCurrent ? 'text-green-700 font-bold' : isDone ? 'text-gray-600' : 'text-gray-400'}`}>
-                              {step.replace(/_/g, ' ')}
+                              {stepLabels[step] || step}
                             </span>
                           </div>
                         );

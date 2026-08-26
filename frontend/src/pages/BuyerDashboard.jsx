@@ -74,11 +74,41 @@ export default function BuyerDashboard() {
     setOrderQuantity('');
     setOrderLocation(profile?.location || '');
     setOrderError('');
+    setRouteEstimate(null);
+  };
+
+  const handleCalculateEstimate = async () => {
+    if (!orderLocation) {
+      setOrderError('Please enter a delivery destination city first.');
+      return;
+    }
+    if (!orderQuantity || isNaN(parseFloat(orderQuantity)) || parseFloat(orderQuantity) <= 0) {
+      setOrderError('Please enter a valid quantity first.');
+      return;
+    }
+    setEstimatingRoute(true);
+    setOrderError('');
+    try {
+      const res = await routeAPI.estimate(orderingListing.location, orderLocation);
+      setRouteEstimate({
+        distanceKm: res.data.distanceKm,
+        estimatedTime: res.data.estimatedTime,
+        estimatedCost: res.data.estimatedCost
+      });
+    } catch (err) {
+      setOrderError(err.response?.data?.error || 'Failed to estimate delivery route. Please check spelling of origin/destination.');
+    } finally {
+      setEstimatingRoute(false);
+    }
   };
 
   const handlePlaceOrder = async (e) => {
     e.preventDefault();
     setOrderError('');
+    if (!routeEstimate) {
+      setOrderError('You must calculate the delivery estimate before confirming the order.');
+      return;
+    }
     setOrdering(true);
     try {
       const qty = parseFloat(orderQuantity);
@@ -99,6 +129,7 @@ export default function BuyerDashboard() {
       });
       alert('Order placed successfully!');
       setOrderingListing(null);
+      setRouteEstimate(null);
       setSelectedMatchDemand(null); // Close matches modal as well
       load();
     } catch (err) {
@@ -349,7 +380,7 @@ export default function BuyerDashboard() {
                   type="number"
                   step="any"
                   value={orderQuantity}
-                  onChange={(e) => setOrderQuantity(e.target.value)}
+                  onChange={(e) => { setOrderQuantity(e.target.value); setRouteEstimate(null); }}
                   className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-green-500 text-sm font-numeric"
                   placeholder={`Max ${orderingListing.quantity} kg`}
                   required
@@ -363,24 +394,59 @@ export default function BuyerDashboard() {
                 <label className="block text-sm font-semibold text-gray-700 mb-1">
                   Delivery Destination
                 </label>
-                <input
-                  type="text"
-                  value={orderLocation}
-                  onChange={(e) => setOrderLocation(e.target.value)}
-                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-green-500 text-sm"
-                  placeholder="e.g. Warehouse Location"
-                  required
-                />
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={orderLocation}
+                    onChange={(e) => { setOrderLocation(e.target.value); setRouteEstimate(null); }}
+                    className="flex-1 px-3 py-2 border rounded-lg focus:ring-2 focus:ring-green-500 text-sm"
+                    placeholder="e.g. Warehouse Location"
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={handleCalculateEstimate}
+                    disabled={estimatingRoute || !orderLocation || !orderQuantity}
+                    className="bg-blue-50 border border-blue-200 text-blue-700 px-3 py-2 rounded-lg text-xs font-bold hover:bg-blue-100 disabled:opacity-50 transition-colors"
+                  >
+                    {estimatingRoute ? 'Calculating...' : 'Estimate Route'}
+                  </button>
+                </div>
               </div>
 
-              {orderQuantity && !isNaN(parseFloat(orderQuantity)) && (
+              {routeEstimate ? (
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-900 space-y-2 leading-relaxed">
+                  <h4 className="font-bold flex items-center gap-1 text-blue-950 text-xs">
+                    🚚 OSRM Road Route Estimate
+                  </h4>
+                  <div className="grid grid-cols-3 gap-2 text-xs border-b border-blue-100 pb-2 mb-2">
+                    <div>📍 Distance: <span className="font-bold">{routeEstimate.distanceKm} km</span></div>
+                    <div>⏱ Time: <span className="font-bold">{routeEstimate.estimatedTime}</span></div>
+                    <div>🚚 Cost: <span className="font-bold font-numeric text-green-700">₹{routeEstimate.estimatedCost}</span></div>
+                  </div>
+                  <div className="space-y-1 text-xs">
+                    <div className="flex justify-between">
+                      <span>Produce Value:</span>
+                      <span className="font-bold font-numeric">₹{(parseFloat(orderQuantity) * parseFloat(orderingListing.asking_price)).toLocaleString()}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Transport Cost:</span>
+                      <span className="font-bold font-numeric">₹{routeEstimate.estimatedCost.toLocaleString()}</span>
+                    </div>
+                    <div className="flex justify-between border-t border-blue-100 pt-1 font-bold text-sm text-blue-950">
+                      <span>Estimated Total:</span>
+                      <span className="font-numeric">₹{(parseFloat(orderQuantity) * parseFloat(orderingListing.asking_price) + routeEstimate.estimatedCost).toLocaleString()}</span>
+                    </div>
+                  </div>
+                </div>
+              ) : orderQuantity && !isNaN(parseFloat(orderQuantity)) && (
                 <div className="bg-green-50 rounded-lg p-3 text-sm text-green-800 space-y-1">
                   <div className="flex justify-between">
                     <span>Produce Cost:</span>
                     <span className="font-bold font-numeric">Rs{(parseFloat(orderQuantity) * parseFloat(orderingListing.asking_price)).toLocaleString()}</span>
                   </div>
-                  <div className="flex justify-between text-xs text-green-600">
-                    <span>* Logistics & road routing calculated upon submission</span>
+                  <div className="flex justify-between text-xs text-green-600 font-semibold">
+                    <span>* Please click 'Estimate Route' to preview transport costs.</span>
                   </div>
                 </div>
               )}
@@ -388,7 +454,7 @@ export default function BuyerDashboard() {
               <div className="flex gap-2 pt-2">
                 <button
                   type="submit"
-                  disabled={ordering}
+                  disabled={ordering || !routeEstimate}
                   className="flex-1 bg-green-600 text-white py-2.5 rounded-lg text-sm font-semibold hover:bg-green-700 disabled:opacity-50 transition-colors"
                 >
                   {ordering ? 'Placing Order...' : 'Confirm Order'}
