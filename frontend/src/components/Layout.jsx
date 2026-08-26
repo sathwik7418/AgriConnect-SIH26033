@@ -1,11 +1,12 @@
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Sprout, ShoppingCart, BarChart3, Truck, Activity, LogOut, Menu, X, Home } from 'lucide-react';
+import { Sprout, ShoppingCart, BarChart3, Truck, Activity, LogOut, Menu, X, Home, ShoppingBag } from 'lucide-react';
 import { useState } from 'react';
 
 const navItems = [
   { path: '/', label: 'Dashboard', icon: Home },
   { path: '/marketplace', label: 'Marketplace', icon: ShoppingCart },
+  { path: '/orders', label: 'Orders', icon: ShoppingBag },
   { path: '/prices', label: 'Market Prices', icon: BarChart3 },
   { path: '/logistics', label: 'Logistics', icon: Truck },
   { path: '/impact', label: 'Impact', icon: Activity },
@@ -16,6 +17,38 @@ export default function Layout() {
   const location = useLocation();
   const navigate = useNavigate();
   const [mobileOpen, setMobileOpen] = useState(false);
+
+  const getNavItems = () => {
+    if (!user) return [];
+    const role = user.role;
+    if (role === 'FARMER' || role === 'FPO') {
+      return [
+        { path: '/', label: 'Dashboard', icon: Home },
+        { path: '/orders', label: 'Orders', icon: ShoppingBag },
+        { path: '/prices', label: 'Market Prices', icon: BarChart3 },
+        { path: '/logistics', label: 'Logistics', icon: Truck },
+        { path: '/impact', label: 'Impact', icon: Activity },
+      ];
+    } else if (role === 'BUYER') {
+      return [
+        { path: '/', label: 'Dashboard', icon: Home },
+        { path: '/marketplace', label: 'Marketplace', icon: ShoppingCart },
+        { path: '/orders', label: 'Orders', icon: ShoppingBag },
+        { path: '/prices', label: 'Market Prices', icon: BarChart3 },
+        { path: '/logistics', label: 'Logistics', icon: Truck },
+        { path: '/impact', label: 'Impact', icon: Activity },
+      ];
+    } else if (role === 'CONSUMER') {
+      return [
+        { path: '/marketplace', label: 'Marketplace', icon: ShoppingCart },
+        { path: '/orders', label: 'Orders', icon: ShoppingBag },
+        { path: '/impact', label: 'Impact', icon: Activity },
+      ];
+    }
+    return navItems;
+  };
+
+  const navs = getNavItems();
 
   const handleLogout = () => {
     logout();
@@ -34,7 +67,7 @@ export default function Layout() {
                 <span className="text-xl font-bold text-gray-900">Agri<span className="text-green-600">Connect</span></span>
               </Link>
               <div className="hidden md:flex items-center gap-1">
-                {navItems.map(({ path, label, icon: Icon }) => (
+                {navs.map(({ path, label, icon: Icon }) => (
                   <Link
                     key={path}
                     to={path}
@@ -68,7 +101,7 @@ export default function Layout() {
       {mobileOpen && (
         <div className="md:hidden bg-white border-b shadow-lg">
           <div className="px-4 py-2 space-y-1">
-            {navItems.map(({ path, label, icon: Icon }) => (
+            {navs.map(({ path, label, icon: Icon }) => (
               <Link
                 key={path}
                 to={path}

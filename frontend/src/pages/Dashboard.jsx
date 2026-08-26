@@ -155,12 +155,14 @@ export default function Dashboard() {
                 <div className="text-right">
                   <p className="font-semibold text-blue-700">{parseInt(f.predicted_demand).toLocaleString()} kg</p>
                   <div className="flex items-center gap-1.5 justify-end">
-                    {f.model_version === 'DEMO' || f.model_version === 'SYNTHETIC' || f.data_source === 'seed_demo' ? (
+                    {f.model_version === 'HISTORICAL' || f.data_source === 'historical_dataset' ? (
+                      <span className="px-1.5 py-0.5 text-[10px] rounded bg-blue-100 text-blue-700 font-semibold">HISTORICAL</span>
+                    ) : f.model_version === 'DEMO' || f.model_version === 'SYNTHETIC' || f.data_source === 'seed_demo' ? (
                       <span className="px-1.5 py-0.5 text-[10px] rounded bg-amber-100 text-amber-700 font-medium">DEMO</span>
                     ) : (
                       <span className="px-1.5 py-0.5 text-[10px] rounded bg-green-100 text-green-700 font-medium">LIVE</span>
                     )}
-                    <p className="text-xs text-gray-400">{f.confidence_score}% conf.</p>
+                    <p className="text-xs text-gray-400">{f.confidence_score ? `${f.confidence_score}%` : 'N/A'} conf.</p>
                   </div>
                 </div>
               </div>

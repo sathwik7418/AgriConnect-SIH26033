@@ -4,7 +4,7 @@ import { listingAPI, dashboardAPI, orderAPI } from '../services/api';
 import { Plus, Package, TrendingUp, ShoppingCart, Eye } from 'lucide-react';
 
 export default function FarmerDashboard() {
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const [stats, setStats] = useState({});
   const [listings, setListings] = useState([]);
   const [showAdd, setShowAdd] = useState(false);
@@ -12,12 +12,14 @@ export default function FarmerDashboard() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    load();
-  }, []);
+    if (profile?.id) {
+      load();
+    }
+  }, [profile]);
 
   const load = async () => {
     try {
-      const [s, l] = await Promise.all([dashboardAPI.getStats(), listingAPI.getAll()]);
+      const [s, l] = await Promise.all([dashboardAPI.getStats(), listingAPI.getByFarmer(profile.id)]);
       setStats(s.data);
       setListings(l.data);
     } finally { setLoading(false); }

@@ -50,12 +50,14 @@ export const buyerAPI = {
 export const demandAPI = {
   getAll: () => api.get('/demands'),
   getByCommodity: (commodity) => api.get(`/demands/commodity/${commodity}`),
+  getByBuyer: (buyerId) => api.get(`/demands/buyer/${buyerId}`),
   create: (data) => api.post('/demands', data),
 };
 
 // Order API
 export const orderAPI = {
   getByBuyer: (buyerId) => api.get(`/orders/buyer/${buyerId}`),
+  getByFarmer: (farmerId) => api.get(`/orders/farmer/${farmerId}`),
   create: (data) => api.post('/orders', data),
   updateStatus: (id, status) => api.put(`/orders/${id}/status`, { status }),
 };
@@ -81,6 +83,7 @@ export const impactAPI = {
 // Route API
 export const routeAPI = {
   getAll: () => api.get('/routes'),
+  estimate: (origin, destination) => api.post('/routes/estimate', { origin, destination }),
   create: (data) => api.post('/routes', data),
 };
 
@@ -93,6 +96,12 @@ export const dashboardAPI = {
 export const supplyDemandAPI = {
   getSummary: () => api.get('/supply-demand/summary'),
   getMatches: (commodity, params) => api.get(`/supply-demand/match/${commodity}`, { params }),
+};
+
+// Profiles & Onboarding API
+export const profilesAPI = {
+  me: () => api.get('/profiles/me'),
+  onboard: (data) => api.post('/profiles/onboard', data),
 };
 
 // Config Status API

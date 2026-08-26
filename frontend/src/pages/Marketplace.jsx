@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react';
-import { listingAPI, demandAPI } from '../services/api';
-import { Search, Filter, ShoppingCart } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
+import { listingAPI, demandAPI, orderAPI } from '../services/api';
+import { Search, Filter, ShoppingCart, Info, X } from 'lucide-react';
 
 const commodities = ['ALL', 'TOMATO', 'ONION', 'POTATO', 'WHEAT', 'RICE', 'CORN', 'BRINJAL', 'LETTUCE', 'MANGO', 'APPLE', 'BANANA'];
 
 export default function Marketplace() {
+  const { user, profile } = useAuth();
   const [tab, setTab] = useState('listings');
   const [listings, setListings] = useState([]);
   const [demands, setDemands] = useState([]);
@@ -12,12 +14,62 @@ export default function Marketplace() {
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
 
+  // Ordering State
+  const [orderingListing, setOrderingListing] = useState(null);
+  const [orderQuantity, setOrderQuantity] = useState('');
+  const [orderLocation, setOrderLocation] = useState('');
+  const [orderError, setOrderError] = useState('');
+  const [ordering, setOrdering] = useState(false);
+
   useEffect(() => {
+    loadData();
+  }, []);
+
+  const loadData = () => {
+    setLoading(true);
     Promise.all([listingAPI.getAll(), demandAPI.getAll()]).then(([l, d]) => {
       setListings(l.data);
       setDemands(d.data);
     }).finally(() => setLoading(false));
-  }, []);
+  };
+
+  const handleOpenOrder = (listing) => {
+    setOrderingListing(listing);
+    setOrderQuantity('');
+    setOrderLocation(profile?.location || '');
+    setOrderError('');
+  };
+
+  const handlePlaceOrder = async (e) => {
+    e.preventDefault();
+    setOrderError('');
+    setOrdering(true);
+    try {
+      const qty = parseFloat(orderQuantity);
+      if (isNaN(qty) || qty <= 0) {
+        setOrderError('Please enter a valid quantity greater than zero');
+        setOrdering(false);
+        return;
+      }
+      if (qty > parseFloat(orderingListing.quantity)) {
+        setOrderError(`Only ${orderingListing.quantity} kg available`);
+        setOrdering(false);
+        return;
+      }
+      await orderAPI.create({
+        listingId: orderingListing.id,
+        quantity: qty,
+        deliveryLocation: orderLocation || orderingListing.location
+      });
+      alert('Order placed successfully!');
+      setOrderingListing(null);
+      loadData();
+    } catch (err) {
+      setOrderError(err.response?.data?.error || 'Failed to place order. Please try again.');
+    } finally {
+      setOrdering(false);
+    }
+  };
 
   const filteredListings = listings.filter(l =>
     (filter === 'ALL' || l.commodity === filter) &&
@@ -74,31 +126,41 @@ export default function Marketplace() {
       {/* Listings Grid */}
       {tab === 'listings' && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filteredListings.map(l => (
-            <div key={l.id} className="bg-white rounded-xl card-shadow p-5 hover-lift">
-              <div className="flex justify-between items-start mb-3">
-                <div>
-                  <h3 className="font-semibold text-gray-900 text-lg">{l.commodity}</h3>
-                  <p className="text-sm text-gray-500">{l.variety} | {(l.grade || '').replace('_', ' ')}</p>
+          {filteredListings.map(l => {
+            const isOwnListing = l.farmer_id === profile?.id;
+            return (
+              <div key={l.id} className="bg-white rounded-xl card-shadow p-5 hover-lift">
+                <div className="flex justify-between items-start mb-3">
+                  <div>
+                    <h3 className="font-semibold text-gray-900 text-lg">{l.commodity}</h3>
+                    <p className="text-sm text-gray-500">{l.variety} | {(l.grade || '').replace('_', ' ')}</p>
+                  </div>
+                  <span className={`px-2 py-0.5 text-xs rounded-full ${isOwnListing ? 'bg-blue-100 text-blue-700 font-semibold' : 'bg-green-100 text-green-700'}`}>
+                    {isOwnListing ? 'YOUR LISTING' : l.listing_status}
+                  </span>
                 </div>
-                <span className="px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-700">{l.listing_status}</span>
-              </div>
-              <div className="space-y-1.5 mb-4">
-                <p className="text-sm text-gray-600">Farmer: <span className="font-medium">{l.farmer_name}</span></p>
-                <p className="text-sm text-gray-600">Location: {l.location}, {l.farmer_state}</p>
-                <p className="text-sm text-gray-600">Quantity: <span className="font-medium">{l.quantity} {l.unit}</span></p>
-              </div>
-              <div className="flex justify-between items-center pt-3 border-t">
-                <div>
-                  <span className="text-2xl font-bold text-green-700">Rs{l.asking_price}</span>
-                  <span className="text-sm text-gray-500">/kg</span>
+                <div className="space-y-1.5 mb-4">
+                  <p className="text-sm text-gray-600">Farmer: <span className="font-medium">{l.farmer_name}</span></p>
+                  <p className="text-sm text-gray-600">Location: {l.location}, {l.farmer_state}</p>
+                  <p className="text-sm text-gray-600">Quantity: <span className="font-medium">{l.quantity} {l.unit}</span></p>
                 </div>
-                <button className="flex items-center gap-1 bg-green-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-green-700">
-                  <ShoppingCart className="h-4 w-4" /> Order
-                </button>
+                <div className="flex justify-between items-center pt-3 border-t">
+                  <div>
+                    <span className="text-2xl font-bold text-green-700 font-numeric">Rs{l.asking_price}</span>
+                    <span className="text-sm text-gray-500">/kg</span>
+                  </div>
+                  {(user?.role === 'BUYER' || user?.role === 'CONSUMER') && !isOwnListing && (
+                    <button
+                      onClick={() => handleOpenOrder(l)}
+                      className="flex items-center gap-1 bg-green-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-green-700"
+                    >
+                      <ShoppingCart className="h-4 w-4" /> Order
+                    </button>
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -121,12 +183,103 @@ export default function Marketplace() {
               </div>
               <div className="flex justify-between items-center pt-3 border-t">
                 <div>
-                  <span className="text-2xl font-bold text-blue-700">Rs{d.target_price}</span>
+                  <span className="text-2xl font-bold text-blue-700 font-numeric">Rs{d.target_price}</span>
                   <span className="text-sm text-gray-500">/kg target</span>
                 </div>
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Order Modal */}
+      {orderingListing && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 relative card-shadow animate-scale">
+            <button
+              onClick={() => setOrderingListing(null)}
+              className="absolute right-4 top-4 p-1 rounded-lg hover:bg-gray-100"
+            >
+              <X className="h-5 w-5 text-gray-400" />
+            </button>
+
+            <h3 className="text-lg font-bold text-gray-900 mb-2 flex items-center gap-1.5">
+              <ShoppingCart className="h-5 w-5 text-green-600" />
+              Place Direct Order
+            </h3>
+            <p className="text-sm text-gray-500 mb-4">
+              Ordering <span className="font-semibold text-gray-800">{orderingListing.commodity} ({orderingListing.variety})</span> from <span className="font-semibold text-gray-800">{orderingListing.farmer_name}</span>
+            </p>
+
+            {orderError && (
+              <div className="bg-red-50 border border-red-200 text-red-700 text-xs p-3 rounded-lg mb-4">
+                {orderError}
+              </div>
+            )}
+
+            <form onSubmit={handlePlaceOrder} className="space-y-4">
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">
+                  Quantity to Order (kg)
+                </label>
+                <input
+                  type="number"
+                  step="any"
+                  value={orderQuantity}
+                  onChange={(e) => setOrderQuantity(e.target.value)}
+                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-green-500 text-sm font-numeric"
+                  placeholder={`Max ${orderingListing.quantity} kg`}
+                  required
+                />
+                <span className="text-xs text-gray-400 mt-1 block">
+                  Available: {orderingListing.quantity} kg | Price: Rs{orderingListing.asking_price}/kg
+                </span>
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">
+                  Delivery Destination
+                </label>
+                <input
+                  type="text"
+                  value={orderLocation}
+                  onChange={(e) => setOrderLocation(e.target.value)}
+                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-green-500 text-sm"
+                  placeholder="e.g. Pune Central Warehouse"
+                  required
+                />
+              </div>
+
+              {orderQuantity && !isNaN(parseFloat(orderQuantity)) && (
+                <div className="bg-green-50 rounded-lg p-3 text-sm text-green-800 space-y-1">
+                  <div className="flex justify-between">
+                    <span>Produce Cost:</span>
+                    <span className="font-bold font-numeric">Rs{(parseFloat(orderQuantity) * parseFloat(orderingListing.asking_price)).toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between text-xs text-green-600">
+                    <span>* Logistics & road routing calculated upon submission</span>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="submit"
+                  disabled={ordering}
+                  className="flex-1 bg-green-600 text-white py-2.5 rounded-lg text-sm font-semibold hover:bg-green-700 disabled:opacity-50 transition-colors"
+                >
+                  {ordering ? 'Placing Order...' : 'Confirm Order'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setOrderingListing(null)}
+                  className="px-4 py-2.5 border rounded-lg text-sm font-semibold hover:bg-gray-50 text-gray-700"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
     </div>

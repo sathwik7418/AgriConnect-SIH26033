@@ -1,29 +1,72 @@
 const https = require('https');
 const http = require('http');
 
+const locationCoords = {
+  'pune': { lat: 18.5204, lng: 73.8567 },
+  'mumbai': { lat: 19.0760, lng: 72.8777 },
+  'nagpur': { lat: 21.1458, lng: 79.0882 },
+  'nashik': { lat: 19.9975, lng: 73.7898 },
+  'aurangabad': { lat: 19.8762, lng: 75.3433 },
+  'satara': { lat: 17.6805, lng: 73.9979 },
+  'kolhapur': { lat: 16.7050, lng: 74.2433 },
+  'solapur': { lat: 17.6599, lng: 75.9064 },
+  'jalgaon': { lat: 21.0077, lng: 75.5626 },
+  'ibrahimpatnam': { lat: 17.1891, lng: 78.6481 },
+  'hyderabad': { lat: 17.3850, lng: 78.4867 },
+  'bangalore': { lat: 12.9716, lng: 77.5946 },
+  'bengaluru': { lat: 12.9716, lng: 77.5946 },
+  'delhi': { lat: 28.6139, lng: 77.2090 },
+  'new delhi': { lat: 28.6139, lng: 77.2090 },
+  'ahmedabad': { lat: 23.0225, lng: 72.5714 },
+  'surat': { lat: 21.1702, lng: 72.8311 },
+  'bhopal': { lat: 23.2599, lng: 77.4126 },
+  'indore': { lat: 22.7196, lng: 75.8577 },
+  'jaipur': { lat: 26.9124, lng: 75.7873 },
+  'lucknow': { lat: 26.8467, lng: 80.9462 },
+  'patna': { lat: 25.5941, lng: 85.1376 },
+  'kolkata': { lat: 22.5726, lng: 88.3639 },
+  'chennai': { lat: 13.0827, lng: 80.2707 }
+};
+
 class RoutingProvider {
   constructor() {
     this.name = 'routing';
-    this.provider = process.env.ROUTING_PROVIDER || '';
+    this.provider = process.env.ROUTING_PROVIDER || 'openrouteservice';
     this.apiKey = process.env.ROUTING_API_KEY;
     this.apiUrl = process.env.ROUTING_API_URL;
   }
 
-  isConfigured() {
-    return !!(this.provider && this.apiKey);
+  geocode(locationStr) {
+    if (!locationStr) return null;
+    const clean = locationStr.toLowerCase().trim();
+    
+    // 1. Exact match lookup
+    if (locationCoords[clean]) {
+      return locationCoords[clean];
+    }
+    
+    // 2. Contains match lookup
+    for (const [city, coords] of Object.entries(locationCoords)) {
+      if (clean.includes(city) || city.includes(clean)) {
+        return coords;
+      }
+    }
+    
+    // 3. Fail safe default fallback (Pune)
+    return locationCoords['pune'];
   }
 
   async getRoute(origin, destination) {
-    if (!this.isConfigured()) {
-      return {
-        success: false,
-        error: 'Routing provider not configured',
-        route: null,
-        source: 'unavailable',
-      };
+    let activeProvider = this.provider ? this.provider.toLowerCase() : 'osrm';
+    
+    // Fallback to OSRM if OpenRouteService API key is missing
+    if (activeProvider === 'openrouteservice' && !this.apiKey) {
+      activeProvider = 'osrm';
     }
 
-    switch (this.provider.toLowerCase()) {
+    switch (activeProvider) {
+      case 'openrouteservice':
+        return this._openRouteServiceRoute(origin, destination);
       case 'osrm':
         return this._osrmRoute(origin, destination);
       case 'google':
@@ -31,7 +74,32 @@ class RoutingProvider {
       case 'mapbox':
         return this._mapboxRoute(origin, destination);
       default:
-        return { success: false, error: `Unknown routing provider: ${this.provider}`, route: null };
+        return this._osrmRoute(origin, destination);
+    }
+  }
+
+  async _openRouteServiceRoute(origin, destination) {
+    const url = `https://api.openrouteservice.org/v2/directions/driving-car?api_key=${this.apiKey}&start=${origin.lng},${origin.lat}&end=${destination.lng},${destination.lat}`;
+    try {
+      const data = await this._httpGet(url);
+      if (!data.features?.length) {
+        // Fallback to OSRM if OpenRouteService fails
+        console.warn('OpenRouteService returned no features, falling back to OSRM.');
+        return this._osrmRoute(origin, destination);
+      }
+      const summary = data.features[0].properties.summary;
+      return {
+        success: true,
+        route: {
+          distanceKm: Math.round(summary.distance / 1000),
+          estimatedTime: `${Math.round(summary.duration / 60)} min`,
+          estimatedCost: 0,
+          source: 'openrouteservice',
+        },
+      };
+    } catch (error) {
+      console.warn('OpenRouteService failed, falling back to OSRM:', error.message);
+      return this._osrmRoute(origin, destination);
     }
   }
 
@@ -99,6 +167,26 @@ class RoutingProvider {
     } catch (error) {
       return { success: false, error: error.message, route: null };
     }
+  }
+
+  async calculateRouteDetails(originName, destinationName) {
+    const origin = this.geocode(originName);
+    const destination = this.geocode(destinationName);
+    
+    if (!origin || !destination) {
+      return {
+        success: false,
+        error: `Could not geocode locations. Origin: ${originName}, Destination: ${destinationName}`
+      };
+    }
+    
+    const result = await this.getRoute(origin, destination);
+    if (result.success) {
+      const distance = result.route.distanceKm;
+      // Calculate cost: Rs 9.5 per km, minimum Rs 300
+      result.route.estimatedCost = Math.max(300, Math.round(distance * 9.5));
+    }
+    return result;
   }
 
   _httpGet(url) {
