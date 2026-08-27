@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { marketAPI } from '../services/api';
+import { useAuth } from '../context/AuthContext';
 import { RefreshCw, TrendingUp, TrendingDown, Minus, Info, LayoutGrid, Table } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 
@@ -7,6 +8,7 @@ const commodities = ['ALL', 'TOMATO', 'ONION', 'POTATO', 'WHEAT', 'RICE'];
 const states = ['ALL', 'Maharashtra', 'Karnataka', 'Madhya Pradesh', 'Rajasthan', 'Delhi'];
 
 export default function MarketPrices() {
+  const { user } = useAuth();
   const [prices, setPrices] = useState([]);
   const [latest, setLatest] = useState([]);
   const [commodity, setCommodity] = useState('ALL');
@@ -14,6 +16,8 @@ export default function MarketPrices() {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [viewMode, setViewMode] = useState('cards'); // 'cards' (Farmer visual view) or 'table' (Tabular view)
+  const [dailyIntel, setDailyIntel] = useState(null);
+  const [intelLoading, setIntelLoading] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -27,7 +31,29 @@ export default function MarketPrices() {
     } finally { setLoading(false); }
   };
 
-  useEffect(() => { load(); }, [commodity, state]);
+  const loadIntel = async () => {
+    if (commodity === 'ALL') {
+      setDailyIntel(null);
+      return;
+    }
+    setIntelLoading(true);
+    try {
+      const params = { commodity };
+      if (state !== 'ALL') params.state = state;
+      const res = await marketAPI.getDailyIntelligence(params);
+      setDailyIntel(res.data);
+    } catch (err) {
+      console.error('Failed to load daily price intelligence:', err);
+      setDailyIntel(null);
+    } finally {
+      setIntelLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+    loadIntel();
+  }, [commodity, state]);
 
   const handleSync = async () => {
     setSyncing(true);
@@ -98,10 +124,12 @@ export default function MarketPrices() {
           <h1 className="text-2xl font-bold text-gray-900">Market Prices (Mandi Price Intelligence)</h1>
           <p className="text-gray-500 text-sm">Official daily mandi rates across government-regulated APMC markets</p>
         </div>
-        <button onClick={handleSync} disabled={syncing} className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 disabled:opacity-50 text-sm font-medium shadow-sm">
-          <RefreshCw className={`h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
-          Sync Data
-        </button>
+        {user?.role === 'ADMIN' && (
+          <button onClick={handleSync} disabled={syncing} className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 disabled:opacity-50 text-sm font-medium shadow-sm">
+            <RefreshCw className={`h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
+            Sync Data
+          </button>
+        )}
       </div>
 
       {/* Guide Panel */}
@@ -147,6 +175,67 @@ export default function MarketPrices() {
           </div>
         </div>
       </div>
+
+      {commodity !== 'ALL' && (
+        <div className="bg-white rounded-xl p-5 border card-shadow space-y-3">
+          <h3 className="font-semibold text-gray-900 flex items-center gap-1.5 text-base">
+            📈 Daily Price Intelligence for <strong className="text-green-700">{commodity}</strong>
+            {state !== 'ALL' && ` in ${state}`}
+          </h3>
+          
+          {intelLoading ? (
+            <div className="text-sm text-gray-400 flex items-center gap-2 py-4">
+              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-green-600"></div>
+              Loading price movements...
+            </div>
+          ) : dailyIntel ? (
+            dailyIntel.status === 'Comparison unavailable' ? (
+              <div className="text-sm text-gray-500 bg-gray-50 p-4 rounded-lg border border-dashed leading-relaxed">
+                ⚠️ <strong>Comparison unavailable</strong>: Not enough consecutive arrival records exist in the APMC database to calculate daily price change.
+                {dailyIntel.todayPrice ? ` Latest observed rate is ₹${dailyIntel.todayPrice.toFixed(1)}/kg.` : ''}
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+                <div className="bg-gray-50 p-4 rounded-lg border">
+                  <p className="text-xs text-gray-500 font-medium">Latest Modal Rate</p>
+                  <p className="text-lg font-bold text-gray-900 font-numeric mt-1">₹{dailyIntel.todayPrice.toFixed(1)}/kg</p>
+                  <p className="text-[10px] text-gray-400 mt-1">As of {new Date(dailyIntel.todayDate).toLocaleDateString()}</p>
+                </div>
+                <div className="bg-gray-50 p-4 rounded-lg border">
+                  <p className="text-xs text-gray-500 font-medium">Previous Modal Rate</p>
+                  <p className="text-lg font-bold text-gray-900 font-numeric mt-1">₹{dailyIntel.yesterdayPrice.toFixed(1)}/kg</p>
+                  <p className="text-[10px] text-gray-400 mt-1">As of {new Date(dailyIntel.yesterdayDate).toLocaleDateString()}</p>
+                </div>
+                <div className="bg-gray-50 p-4 rounded-lg border">
+                  <p className="text-xs text-gray-500 font-medium">Absolute Change</p>
+                  <div className="flex items-center gap-1.5 mt-1">
+                    {dailyIntel.difference > 0 ? (
+                      <TrendingUp className="h-5 w-5 text-green-600" />
+                    ) : dailyIntel.difference < 0 ? (
+                      <TrendingDown className="h-5 w-5 text-red-600" />
+                    ) : (
+                      <Minus className="h-5 w-5 text-gray-500" />
+                    )}
+                    <span className={`text-lg font-bold font-numeric ${dailyIntel.difference > 0 ? 'text-green-600' : dailyIntel.difference < 0 ? 'text-red-600' : 'text-gray-500'}`}>
+                      {dailyIntel.difference > 0 ? '+' : ''}{dailyIntel.difference.toFixed(1)}/kg
+                    </span>
+                  </div>
+                </div>
+                <div className="bg-gray-50 p-4 rounded-lg border">
+                  <p className="text-xs text-gray-500 font-medium">Percentage Change</p>
+                  <p className={`text-lg font-bold font-numeric mt-1 ${dailyIntel.percentageChange > 0 ? 'text-green-600' : dailyIntel.percentageChange < 0 ? 'text-red-600' : 'text-gray-500'}`}>
+                    {dailyIntel.percentageChange > 0 ? '+' : ''}{dailyIntel.percentageChange.toFixed(2)}%
+                  </p>
+                </div>
+              </div>
+            )
+          ) : (
+            <div className="text-sm text-gray-500">
+              No matching price data available for {commodity}.
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Average Modal Price Chart */}
       {barData.length > 0 && (

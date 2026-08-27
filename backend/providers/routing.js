@@ -42,29 +42,45 @@ class RoutingProvider {
     return !!this.apiKey;
   }
 
-  geocode(locationStr) {
+  async geocode(locationStr) {
     if (!locationStr) return null;
     const clean = locationStr.toLowerCase().trim();
     
-    // Validate garbage input (less than 3 characters or containing no letters)
-    if (clean.length < 3 || !/[a-z]/.test(clean)) {
+    // Validate garbage input
+    if (clean.length < 3 || !/[a-z0-9]/i.test(clean)) {
       return null;
     }
     
-    // 1. Exact match lookup
+    // 1. Try local exact match
     if (locationCoords[clean]) {
-      return { ...locationCoords[clean], isFallback: false };
+      return { ...locationCoords[clean], isFallback: false, provider: 'local' };
     }
     
-    // 2. Contains match lookup
+    // 2. Try local contains match
     for (const [city, coords] of Object.entries(locationCoords)) {
       if (clean.includes(city) || city.includes(clean)) {
-        return { ...coords, isFallback: false };
+        return { ...coords, isFallback: false, provider: 'local' };
       }
     }
     
-    // 3. Fail safe default fallback (Pune) marked as fallback
-    return { ...locationCoords['pune'], isFallback: true };
+    // 3. Call OpenStreetMap Nominatim Geocoding API
+    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(locationStr)}&format=json&limit=1`;
+    try {
+      const data = await this._httpGet(url);
+      if (data && data.length > 0) {
+        return {
+          lat: parseFloat(data[0].lat),
+          lng: parseFloat(data[0].lon),
+          isFallback: false,
+          provider: 'nominatim'
+        };
+      }
+    } catch (error) {
+      console.warn('OSM Nominatim Geocoding failed:', error.message);
+    }
+    
+    // 4. Return null if geocoding fails
+    return null;
   }
 
   async getRoute(origin, destination) {
@@ -181,8 +197,8 @@ class RoutingProvider {
   }
 
   async calculateRouteDetails(originName, destinationName) {
-    const origin = this.geocode(originName);
-    const destination = this.geocode(destinationName);
+    const origin = await this.geocode(originName);
+    const destination = await this.geocode(destinationName);
     
     if (!origin || !destination) {
       return {

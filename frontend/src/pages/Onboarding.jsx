@@ -13,7 +13,7 @@ export default function Onboarding() {
   const [loading, setLoading] = useState(false);
 
   // Common Fields
-  const [name, setName] = useState('');
+  const [name, setName] = useState(user?.name || '');
   const [contactNumber, setContactNumber] = useState('');
   const [state, setState] = useState('Maharashtra');
   const [district, setDistrict] = useState('');
@@ -29,8 +29,11 @@ export default function Onboarding() {
   const [organizationType, setOrganizationType] = useState('bulk_buyer');
   const [annualCapacity, setAnnualCapacity] = useState('');
 
-  // Consumer Specific Fields
-  const [address, setAddress] = useState('');
+  useEffect(() => {
+    if (user?.name && !name) {
+      setName(user.name);
+    }
+  }, [user]);
 
   const toggleCrop = (crop) => {
     if (selectedCrops.includes(crop)) {
@@ -71,7 +74,10 @@ export default function Onboarding() {
     } else if (user.role === 'CONSUMER') {
       payload = {
         name,
-        address
+        state,
+        district,
+        location, // delivery address/locality
+        contactNumber
       };
     }
 
@@ -104,30 +110,70 @@ export default function Onboarding() {
           {/* Consumer Onboarding Form */}
           {user?.role === 'CONSUMER' && (
             <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-1">Your Full Name</label>
-                <div className="relative">
-                  <User className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
+              <h3 className="font-semibold text-gray-800 border-b pb-2">🛒 Consumer Information</h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">Your Full Name</label>
+                  <div className="relative">
+                    <User className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
+                    <input
+                      type="text"
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      className="w-full pl-10 pr-4 py-2 border rounded-lg focus:ring-2 focus:ring-green-500 text-sm"
+                      placeholder="Enter your name"
+                      required
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">Contact Phone Number</label>
+                  <div className="relative">
+                    <Phone className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
+                    <input
+                      type="tel"
+                      value={contactNumber}
+                      onChange={(e) => setContactNumber(e.target.value)}
+                      className="w-full pl-10 pr-4 py-2 border rounded-lg focus:ring-2 focus:ring-green-500 text-sm"
+                      placeholder="10-digit mobile number"
+                      required
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">State</label>
+                  <select
+                    value={state}
+                    onChange={(e) => setState(e.target.value)}
+                    className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-green-500 text-sm"
+                  >
+                    {['Andhra Pradesh', 'Bihar', 'Delhi', 'Gujarat', 'Haryana', 'Karnataka', 'Kerala', 'Madhya Pradesh', 'Maharashtra', 'Punjab', 'Rajasthan', 'Telangana', 'Uttar Pradesh', 'West Bengal'].map(s => (
+                      <option key={s} value={s}>{s}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">District</label>
                   <input
                     type="text"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2 border rounded-lg focus:ring-2 focus:ring-green-500 text-sm"
-                    placeholder="Enter your name"
+                    value={district}
+                    onChange={(e) => setDistrict(e.target.value)}
+                    className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-green-500 text-sm"
+                    placeholder="e.g. Pune"
                     required
                   />
                 </div>
-              </div>
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-1">Delivery Address</label>
-                <div className="relative">
-                  <MapPin className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
-                  <textarea
-                    value={address}
-                    onChange={(e) => setAddress(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2 border rounded-lg focus:ring-2 focus:ring-green-500 text-sm"
-                    rows="3"
-                    placeholder="Enter your complete delivery address"
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">Delivery Locality / Address</label>
+                  <input
+                    type="text"
+                    value={location}
+                    onChange={(e) => setLocation(e.target.value)}
+                    className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-green-500 text-sm"
+                    placeholder="e.g. Ibrahimpatnam"
                     required
                   />
                 </div>

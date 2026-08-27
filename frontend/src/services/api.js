@@ -68,6 +68,7 @@ export const orderAPI = {
 export const marketAPI = {
   getPrices: (params) => api.get('/market-prices', { params }),
   getLatest: () => api.get('/market-prices/latest'),
+  getDailyIntelligence: (params) => api.get('/market-prices/daily-intelligence', { params }),
   sync: () => api.post('/market-data/sync'),
 };
 

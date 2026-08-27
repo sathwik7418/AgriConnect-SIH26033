@@ -33,6 +33,45 @@ app.use(cors({
 app.use(express.json());
 app.use(morgan('dev'));
 
+// In-memory rate limiting middleware
+const rateLimits = {};
+const rateLimiter = (options) => {
+  const { windowMs, max, message } = options;
+  return (req, res, next) => {
+    // Exclude testing environments from rate limits if needed
+    if (process.env.NODE_ENV === 'test') {
+      return next();
+    }
+    const ip = req.ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    const now = Date.now();
+    
+    if (!rateLimits[ip]) {
+      rateLimits[ip] = [];
+    }
+    
+    rateLimits[ip] = rateLimits[ip].filter(timestamp => now - timestamp < windowMs);
+    
+    if (rateLimits[ip].length >= max) {
+      return res.status(429).json({ error: message || 'Too many requests, please try again later.' });
+    }
+    
+    rateLimits[ip].push(now);
+    next();
+  };
+};
+
+const authLimiter = rateLimiter({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 30, // Max 30 attempts
+  message: 'Too many authentication attempts. Please try again after 15 minutes.'
+});
+
+const otpLimiter = rateLimiter({
+  windowMs: 5 * 60 * 1000, // 5 minutes
+  max: 30, // Max 30 verification/resend attempts
+  message: 'Too many verification code attempts. Please try again after 5 minutes.'
+});
+
 // Auth middleware
 const authenticate = async (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1];
@@ -56,7 +95,7 @@ const authenticate = async (req, res, next) => {
         req.profileId = profileRes.rows[0].id;
       }
     } else if (req.userRole === 'CONSUMER') {
-      const profileRes = await query('SELECT id FROM consumer_profiles WHERE user_id = $1', [req.userId]);
+      const profileRes = await query('SELECT id FROM buyer_profiles WHERE user_id = $1', [req.userId]);
       if (profileRes.rows.length > 0) {
         req.profileId = profileRes.rows[0].id;
       }
@@ -85,25 +124,41 @@ function generateOTP() {
 }
 
 // Auth routes
-app.post('/api/auth/register', async (req, res) => {
-  const { email, password, role, phone } = req.body;
-  if (!email || !password || !role) {
-    return res.status(400).json({ error: 'Email, password, and role are required' });
+app.post('/api/auth/register', authLimiter, async (req, res) => {
+  const { name, email, password, role } = req.body;
+  if (!name || !email || !password || !role) {
+    return res.status(400).json({ error: 'Name, email, password, and role are required' });
+  }
+
+  const normalizedName = name.trim();
+  if (normalizedName.length < 2) {
+    return res.status(400).json({ error: 'Name must be at least 2 characters long' });
   }
   
+  const normalizedEmail = email.trim().toLowerCase();
+
   // Validate email format
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  if (!emailRegex.test(email)) {
+  if (!emailRegex.test(normalizedEmail)) {
     return res.status(400).json({ error: 'Invalid email format' });
   }
 
-  // Validate password length
-  if (password.length < 6) {
-    return res.status(400).json({ error: 'Password must be at least 6 characters long' });
+  // Validate role
+  const validRoles = ['FARMER', 'FPO', 'BUYER', 'CONSUMER'];
+  if (!validRoles.includes(role.toUpperCase())) {
+    return res.status(400).json({ error: 'Unsupported or invalid user role' });
+  }
+
+  // Validate password complexity (8+ chars, at least one uppercase, one lowercase, one number, one special char)
+  const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
+  if (!passwordRegex.test(password)) {
+    return res.status(400).json({
+      error: 'Password must be at least 8 characters long and contain at least one uppercase letter, one lowercase letter, one number, and one special character (@$!%*?&).'
+    });
   }
 
   try {
-    const existingUser = await query('SELECT id FROM users WHERE email = $1', [email]);
+    const existingUser = await query('SELECT id FROM users WHERE email = $1', [normalizedEmail]);
     if (existingUser.rows.length > 0) {
       return res.status(400).json({ error: 'User already exists' });
     }
@@ -120,13 +175,13 @@ app.post('/api/auth/register', async (req, res) => {
     await query('BEGIN');
     try {
       const result = await query(
-        `INSERT INTO users (email, password, role, phone, is_verified, verification_otp, otp_expires_at, otp_attempts, otp_cooldown_until) 
+        `INSERT INTO users (name, email, password, role, is_verified, verification_otp, otp_expires_at, otp_attempts, otp_cooldown_until) 
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id, email, role, is_verified`,
-        [email, hashedPassword, role, phone, false, hashedOtp, otpExpires, 0, cooldown]
+        [normalizedName, normalizedEmail, hashedPassword, role.toUpperCase(), false, hashedOtp, otpExpires, 0, cooldown]
       );
 
       // Attempt to send transactional email OTP through Brevo
-      await emailProvider.sendVerificationOTP(email, rawOtp);
+      await emailProvider.sendVerificationOTP(normalizedEmail, rawOtp);
 
       await query('COMMIT');
       
@@ -155,8 +210,9 @@ const verifyEmailHandler = async (req, res) => {
   if (!email || !otp) {
     return res.status(400).json({ error: 'Email and OTP are required' });
   }
+  const normalizedEmail = email.trim().toLowerCase();
   try {
-    const userRes = await query('SELECT * FROM users WHERE email = $1', [email]);
+    const userRes = await query('SELECT * FROM users WHERE email = $1', [normalizedEmail]);
     if (userRes.rows.length === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
@@ -201,7 +257,7 @@ const verifyEmailHandler = async (req, res) => {
     const token = jwt.sign({ userId: user.id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
     res.json({ 
       success: true, 
-      user: { id: user.id, email: user.email, role: user.role, is_verified: true }, 
+      user: { id: user.id, name: user.name, email: user.email, role: user.role, is_verified: true }, 
       token 
     });
   } catch (error) {
@@ -210,16 +266,17 @@ const verifyEmailHandler = async (req, res) => {
   }
 };
 
-app.post('/api/auth/verify-email', verifyEmailHandler);
-app.post('/api/auth/verify-otp', verifyEmailHandler);
+app.post('/api/auth/verify-email', otpLimiter, verifyEmailHandler);
+app.post('/api/auth/verify-otp', otpLimiter, verifyEmailHandler);
 
 const resendVerificationHandler = async (req, res) => {
   const { email } = req.body;
   if (!email) {
     return res.status(400).json({ error: 'Email is required' });
   }
+  const normalizedEmail = email.trim().toLowerCase();
   try {
-    const userRes = await query('SELECT * FROM users WHERE email = $1', [email]);
+    const userRes = await query('SELECT * FROM users WHERE email = $1', [normalizedEmail]);
     if (userRes.rows.length === 0) {
       // Prevent account enumeration by returning a mock success response
       return res.json({ success: true, message: 'If the email exists, a new verification code has been sent.' });
@@ -246,7 +303,7 @@ const resendVerificationHandler = async (req, res) => {
     );
     
     try {
-      await emailProvider.sendVerificationOTP(email, rawOtp);
+      await emailProvider.sendVerificationOTP(normalizedEmail, rawOtp);
     } catch (sendErr) {
       console.error('Failed to send verification email:', sendErr);
       return res.status(502).json({ error: 'Failed to send verification email. Please try again later.' });
@@ -263,13 +320,17 @@ const resendVerificationHandler = async (req, res) => {
   }
 };
 
-app.post('/api/auth/resend-verification', resendVerificationHandler);
-app.post('/api/auth/resend-otp', resendVerificationHandler);
+app.post('/api/auth/resend-verification', otpLimiter, resendVerificationHandler);
+app.post('/api/auth/resend-otp', otpLimiter, resendVerificationHandler);
 
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', authLimiter, async (req, res) => {
   const { email, password } = req.body;
+  if (!email || !password) {
+    return res.status(400).json({ error: 'Email and password are required' });
+  }
+  const normalizedEmail = email.trim().toLowerCase();
   try {
-    const result = await query('SELECT id, email, password, role, is_verified FROM users WHERE email = $1', [email]);
+    const result = await query('SELECT id, name, email, password, role, is_verified FROM users WHERE email = $1', [normalizedEmail]);
     if (result.rows.length === 0) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
@@ -289,7 +350,7 @@ app.post('/api/auth/login', async (req, res) => {
     }
     
     const token = jwt.sign({ userId: user.id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
-    res.json({ user: { id: user.id, email: user.email, role: user.role, is_verified: true }, token });
+    res.json({ user: { id: user.id, name: user.name, email: user.email, role: user.role, is_verified: true }, token });
   } catch (error) {
     console.error('Login error:', error);
     res.status(500).json({ error: 'Login failed' });
@@ -305,14 +366,8 @@ app.get('/api/profiles/me', authenticate, async (req, res) => {
         return res.json({ profileExists: false, role: req.userRole });
       }
       return res.json({ profileExists: true, role: req.userRole, profile: result.rows[0] });
-    } else if (req.userRole === 'BUYER') {
+    } else if (req.userRole === 'BUYER' || req.userRole === 'CONSUMER') {
       const result = await query('SELECT * FROM buyer_profiles WHERE user_id = $1', [req.userId]);
-      if (result.rows.length === 0) {
-        return res.json({ profileExists: false, role: req.userRole });
-      }
-      return res.json({ profileExists: true, role: req.userRole, profile: result.rows[0] });
-    } else if (req.userRole === 'CONSUMER') {
-      const result = await query('SELECT * FROM consumer_profiles WHERE user_id = $1', [req.userId]);
       if (result.rows.length === 0) {
         return res.json({ profileExists: false, role: req.userRole });
       }
@@ -339,10 +394,18 @@ app.post('/api/profiles/onboard', authenticate, async (req, res) => {
       if (duplicate.rows.length > 0) {
         return res.status(400).json({ error: 'Farmer profile already exists' });
       }
+
+      // Geocode the location
+      const queryStr = `${location}, ${district}, ${state}`;
+      const geoResult = await routingProvider.geocode(queryStr);
+      if (!geoResult) {
+        return res.status(400).json({ error: "We couldn't verify this location. Please check the locality, district and state." });
+      }
+
       const result = await query(
-        `INSERT INTO farmer_profiles (user_id, name, state, district, location, fpo_name, total_land_area, crops, contact_number)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-        [userId, name, state, district, location, fpoName || null, totalLandArea ? parseFloat(totalLandArea) : null, crops || [], contactNumber]
+        `INSERT INTO farmer_profiles (user_id, name, state, district, location, fpo_name, total_land_area, crops, contact_number, latitude, longitude, geo_provider, verification_timestamp)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW()) RETURNING *`,
+        [userId, name, state, district, location, fpoName || null, totalLandArea ? parseFloat(totalLandArea) : null, crops || [], contactNumber, geoResult.lat, geoResult.lng, geoResult.provider || 'nominatim']
       );
       return res.status(201).json({ success: true, profile: result.rows[0] });
     } else if (role === 'BUYER') {
@@ -354,27 +417,43 @@ app.post('/api/profiles/onboard', authenticate, async (req, res) => {
       if (duplicate.rows.length > 0) {
         return res.status(400).json({ error: 'Buyer profile already exists' });
       }
+
+      // Geocode the location
+      const queryStr = `${location}, ${district}, ${state}`;
+      const geoResult = await routingProvider.geocode(queryStr);
+      if (!geoResult) {
+        return res.status(400).json({ error: "We couldn't verify this location. Please check the delivery location, district and state." });
+      }
+
       const result = await query(
-        `INSERT INTO buyer_profiles (user_id, name, company_name, organization_type, state, district, location, annual_capacity, contact_number)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-        [userId, name, companyName || null, organizationType || null, state, district, location, annualCapacity ? parseFloat(annualCapacity) : null, contactNumber]
+        `INSERT INTO buyer_profiles (user_id, name, company_name, organization_type, state, district, location, annual_capacity, contact_number, latitude, longitude, geo_provider, verification_timestamp)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW()) RETURNING *`,
+        [userId, name, companyName || null, organizationType || null, state, district, location, annualCapacity ? parseFloat(annualCapacity) : null, contactNumber, geoResult.lat, geoResult.lng, geoResult.provider || 'nominatim']
       );
       return res.status(201).json({ success: true, profile: result.rows[0] });
     } else if (role === 'CONSUMER') {
-      const { name, address } = req.body;
-      if (!name || !address) {
-        return res.status(400).json({ error: 'Name and address are required' });
+      const { name, state, district, location, contactNumber } = req.body;
+      if (!name || !state || !district || !location || !contactNumber) {
+        return res.status(400).json({ error: 'Name, state, district, location (delivery address), and contact number are required' });
       }
-      const duplicate = await query('SELECT id FROM consumer_profiles WHERE user_id = $1', [userId]);
+      const duplicate = await query('SELECT id FROM buyer_profiles WHERE user_id = $1', [userId]);
       if (duplicate.rows.length > 0) {
         return res.status(400).json({ error: 'Consumer profile already exists' });
       }
+
+      // Geocode the location
+      const queryStr = `${location}, ${district}, ${state}`;
+      const geoResult = await routingProvider.geocode(queryStr);
+      if (!geoResult) {
+        return res.status(400).json({ error: "We couldn't verify this location. Please check the delivery address, district and state." });
+      }
+
       const userRes = await query('SELECT email FROM users WHERE id = $1', [userId]);
       const email = userRes.rows[0]?.email;
       const result = await query(
-        `INSERT INTO consumer_profiles (user_id, name, address, email)
-         VALUES ($1, $2, $3, $4) RETURNING *`,
-        [userId, name, address, email]
+        `INSERT INTO buyer_profiles (user_id, name, company_name, organization_type, state, district, location, annual_capacity, contact_number, email, latitude, longitude, geo_provider, verification_timestamp)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW()) RETURNING *`,
+        [userId, name, 'Individual', 'INDIVIDUAL', state, district, location, 0, contactNumber, email, geoResult.lat, geoResult.lng, geoResult.provider || 'nominatim']
       );
       return res.status(201).json({ success: true, profile: result.rows[0] });
     }
@@ -431,15 +510,39 @@ app.post('/api/listings', authenticate, async (req, res) => {
   const { commodity, variety, grade, quantity, unit, askingPrice, location, state, district, expectedHarvestDate, availabilityDate, description } = req.body;
   try {
     // Resolve farmer_profiles.id from user_id
-    const farmerResult = await query('SELECT id FROM farmer_profiles WHERE user_id = $1', [req.userId]);
+    const farmerResult = await query('SELECT id, location, state, district, latitude, longitude FROM farmer_profiles WHERE user_id = $1', [req.userId]);
     if (farmerResult.rows.length === 0) {
       return res.status(400).json({ error: 'Farmer profile not found. Create a profile first.' });
     }
-    const farmerProfileId = farmerResult.rows[0].id;
+    const farmer = farmerResult.rows[0];
+    const farmerProfileId = farmer.id;
+    
+    let listingLocation = location || farmer.location;
+    let listingState = state || farmer.state;
+    let listingDistrict = district || farmer.district;
+    let listingLat = farmer.latitude;
+    let listingLng = farmer.longitude;
+
+    if (location && (location !== farmer.location || state !== farmer.state || district !== farmer.district)) {
+      const queryStr = `${location}, ${district}, ${state}`;
+      const geoResult = await routingProvider.geocode(queryStr);
+      if (!geoResult) {
+        return res.status(400).json({ error: "We couldn't verify the custom listing location. Please check the city, district and state." });
+      }
+      listingLocation = location;
+      listingState = state;
+      listingDistrict = district;
+      listingLat = geoResult.lat;
+      listingLng = geoResult.lng;
+    }
+
+    if (!listingLocation || !listingState || !listingDistrict) {
+      return res.status(400).json({ error: 'Listing location is incomplete. Please complete your profile location or supply a valid location.' });
+    }
     
     const result = await query(
-      `INSERT INTO produce_listings (farmer_id, commodity, variety, grade, quantity, unit, asking_price, location, state, district, expected_harvest_date, availability_date, description) 
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *`,
+      `INSERT INTO produce_listings (farmer_id, commodity, variety, grade, quantity, unit, asking_price, location, state, district, expected_harvest_date, availability_date, description, latitude, longitude) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING *`,
       [
         farmerProfileId,
         commodity,
@@ -448,12 +551,14 @@ app.post('/api/listings', authenticate, async (req, res) => {
         parseFloat(quantity),
         unit || 'kg',
         parseFloat(askingPrice),
-        location,
-        state,
-        district,
+        listingLocation,
+        listingState,
+        listingDistrict,
         expectedHarvestDate ? new Date(expectedHarvestDate) : null,
         availabilityDate ? new Date(availabilityDate) : new Date(),
-        description
+        description,
+        listingLat ? parseFloat(listingLat) : null,
+        listingLng ? parseFloat(listingLng) : null
       ]
     );
     res.status(201).json(result.rows[0]);
@@ -668,7 +773,6 @@ app.get('/api/buyers/me', authenticate, async (req, res) => {
   }
 });
 
-// Order routes
 app.post('/api/orders', authenticate, async (req, res) => {
   const { listingId, quantity, deliveryLocation, deliveryDate } = req.body;
   try {
@@ -693,36 +797,110 @@ app.post('/api/orders', authenticate, async (req, res) => {
     if (reqQty > avlQty) {
       return res.status(400).json({ error: `Insufficient quantity available. Only ${avlQty} kg available.` });
     }
+
+    // Resolve buyer details
+    const buyerResult = await query('SELECT location, state, district, latitude, longitude FROM buyer_profiles WHERE id = $1', [buyerProfileId]);
+    if (buyerResult.rows.length === 0) {
+      return res.status(400).json({ error: 'Buyer profile details not found.' });
+    }
+    const buyer = buyerResult.rows[0];
+    
+    let destLocation = deliveryLocation || buyer.location;
+    let destLat = buyer.latitude;
+    let destLng = buyer.longitude;
+
+    if (deliveryLocation && deliveryLocation !== buyer.location) {
+      const geo = await routingProvider.geocode(deliveryLocation);
+      if (geo) {
+        destLat = geo.lat;
+        destLng = geo.lng;
+      }
+    }
+
+    // Origin geocode fallback check
+    let originLat = listing.latitude;
+    let originLng = listing.longitude;
+    if (!originLat || !originLng) {
+      const geo = await routingProvider.geocode(listing.location);
+      if (geo) {
+        originLat = geo.lat;
+        originLng = geo.lng;
+      }
+    }
+
+    let distanceKm = 0;
+    let estimatedTime = '0 min';
+    let transportCost = 0;
+
+    if (originLat && originLng && destLat && destLng) {
+      const routeRes = await routingProvider.getRoute(
+        { lat: parseFloat(originLat), lng: parseFloat(originLng) },
+        { lat: parseFloat(destLat), lng: parseFloat(destLng) }
+      );
+      if (routeRes.success && routeRes.route) {
+        distanceKm = routeRes.route.distanceKm;
+        estimatedTime = routeRes.route.estimatedTime;
+        transportCost = Math.max(300, Math.round(distanceKm * 9.5));
+      }
+    }
+
+    if (transportCost === 0) {
+      return res.status(400).json({ error: "Could not calculate delivery route or transport cost. Please verify pickup and delivery locations." });
+    }
     
     const remainingQty = avlQty - reqQty;
     const newStatus = remainingQty === 0 ? 'SOLD' : 'ACTIVE';
     
-    const transportCost = 0; // Will be calculated by logistics
     const totalPrice = parseFloat(listing.asking_price) * reqQty;
     const netRealization = totalPrice - transportCost;
     
-    const result = await query(
-      `INSERT INTO orders (buyer_id, listing_id, quantity, final_price, transport_cost, net_realization, delivery_location, delivery_date) 
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-      [
-        buyerProfileId,
-        listingId,
-        reqQty,
-        listing.asking_price,
-        transportCost,
-        netRealization,
-        deliveryLocation || listing.location,
-        deliveryDate ? new Date(deliveryDate) : null
-      ]
-    );
-    
-    // Update listing quantity and status
-    await query(
-      'UPDATE produce_listings SET quantity = $1, listing_status = $2 WHERE id = $3',
-      [remainingQty, newStatus, listingId]
-    );
-    
-    res.status(201).json(result.rows[0]);
+    await query('BEGIN');
+    try {
+      const result = await query(
+        `INSERT INTO orders (buyer_id, listing_id, quantity, final_price, transport_cost, net_realization, delivery_location, delivery_date) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+        [
+          buyerProfileId,
+          listingId,
+          reqQty,
+          listing.asking_price,
+          transportCost,
+          netRealization,
+          destLocation,
+          deliveryDate ? new Date(deliveryDate) : null
+        ]
+      );
+      
+      const newOrder = result.rows[0];
+
+      // Insert route associated with the order
+      await query(
+        `INSERT INTO routes (order_id, origin, destination, distance_km, estimated_time, estimated_cost, vehicle_type, status) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [
+          newOrder.id,
+          listing.location,
+          destLocation,
+          distanceKm,
+          estimatedTime,
+          transportCost,
+          'truck_1ton',
+          'planned'
+        ]
+      );
+      
+      // Update listing quantity and status
+      await query(
+        'UPDATE produce_listings SET quantity = $1, listing_status = $2 WHERE id = $3',
+        [remainingQty, newStatus, listingId]
+      );
+      
+      await query('COMMIT');
+      res.status(201).json(newOrder);
+    } catch (dbErr) {
+      await query('ROLLBACK');
+      throw dbErr;
+    }
   } catch (error) {
     console.error('Create order error:', error);
     res.status(500).json({ error: 'Failed to create order' });
@@ -908,6 +1086,69 @@ app.get('/api/market-prices', async (req, res) => {
   } catch (error) {
     console.error('Get market prices error:', error);
     res.status(500).json({ error: 'Failed to fetch market prices' });
+  }
+});
+
+app.get('/api/market-prices/daily-intelligence', async (req, res) => {
+  const { commodity, state } = req.query;
+  if (!commodity) {
+    return res.status(400).json({ error: 'Commodity is required' });
+  }
+  
+  try {
+    // 1. Get today's/latest modal price
+    const latestPriceRes = await query(
+      `SELECT modal_price, arrival_date, source FROM market_prices 
+       WHERE commodity = $1 ${state && state !== 'ALL' ? 'AND state = $2' : ''} 
+       ORDER BY arrival_date DESC LIMIT 1`,
+      state && state !== 'ALL' ? [commodity.toUpperCase(), state] : [commodity.toUpperCase()]
+    );
+    
+    if (latestPriceRes.rows.length === 0) {
+      return res.json({ status: 'Comparison unavailable', message: 'No data points found' });
+    }
+    
+    const latestRecord = latestPriceRes.rows[0];
+    const arrivalDate = latestRecord.arrival_date;
+    
+    // 2. Get the previous modal price on a different arrival_date
+    const prevPriceRes = await query(
+      `SELECT modal_price, arrival_date, source FROM market_prices 
+       WHERE commodity = $1 ${state && state !== 'ALL' ? 'AND state = $2' : ''} AND arrival_date < $3
+       ORDER BY arrival_date DESC LIMIT 1`,
+      state && state !== 'ALL' ? [commodity.toUpperCase(), state, arrivalDate] : [commodity.toUpperCase(), arrivalDate]
+    );
+    
+    const isQuintalLatest = latestRecord.source === 'mandi_api' || latestRecord.source === 'historical_dataset' || latestRecord.source === 'agmarknet_historical';
+    const latestNormalized = isQuintalLatest ? parseFloat(latestRecord.modal_price) / 100 : parseFloat(latestRecord.modal_price);
+    
+    if (prevPriceRes.rows.length === 0) {
+      return res.json({ 
+        status: 'Comparison unavailable', 
+        todayPrice: latestNormalized,
+        message: 'No yesterday/previous record found to compare.' 
+      });
+    }
+    
+    const prevRecord = prevPriceRes.rows[0];
+    const isQuintalPrev = prevRecord.source === 'mandi_api' || prevRecord.source === 'historical_dataset' || prevRecord.source === 'agmarknet_historical';
+    const prevNormalized = isQuintalPrev ? parseFloat(prevRecord.modal_price) / 100 : parseFloat(prevRecord.modal_price);
+    
+    const diff = latestNormalized - prevNormalized;
+    const pctChange = (diff / prevNormalized) * 100;
+    
+    res.json({
+      status: 'success',
+      todayPrice: latestNormalized,
+      yesterdayPrice: prevNormalized,
+      difference: diff,
+      percentageChange: pctChange,
+      todayDate: latestRecord.arrival_date,
+      yesterdayDate: prevRecord.arrival_date
+    });
+  } catch (error) {
+    console.error('Get daily intelligence error:', error);
+    res.status(500).json({ error: 'Failed to fetch daily price intelligence' });
   }
 });
 
@@ -1251,10 +1492,43 @@ app.post('/api/routes', authenticate, async (req, res) => {
   }
 });
 
-app.get('/api/routes', async (req, res) => {
+app.get('/api/routes', authenticate, async (req, res) => {
   try {
-    const result = await query('SELECT * FROM routes ORDER BY created_at DESC');
-    res.json(result.rows);
+    const profileId = req.profileId;
+    if (!profileId && req.userRole !== 'ADMIN') {
+      return res.json([]);
+    }
+
+    if (req.userRole === 'ADMIN') {
+      const result = await query('SELECT * FROM routes ORDER BY created_at DESC');
+      return res.json(result.rows);
+    } else if (req.userRole === 'FARMER' || req.userRole === 'FPO') {
+      const result = await query(
+        `SELECT r.*, o.order_status, o.quantity, o.unit, l.commodity, l.variety, l.grade
+         FROM routes r
+         JOIN orders o ON r.order_id = o.id
+         JOIN produce_listings l ON o.listing_id = l.id
+         WHERE l.farmer_id = $1
+         ORDER BY r.created_at DESC`,
+        [profileId]
+      );
+      return res.json(result.rows);
+    } else if (req.userRole === 'BUYER' || req.userRole === 'CONSUMER') {
+      const result = await query(
+        `SELECT r.*, o.order_status, o.quantity, o.unit, l.commodity, l.variety, l.grade,
+                fp.name as farmer_name
+         FROM routes r
+         JOIN orders o ON r.order_id = o.id
+         JOIN produce_listings l ON o.listing_id = l.id
+         JOIN farmer_profiles fp ON l.farmer_id = fp.id
+         WHERE o.buyer_id = $1
+         ORDER BY r.created_at DESC`,
+        [profileId]
+      );
+      return res.json(result.rows);
+    }
+    
+    res.json([]);
   } catch (error) {
     console.error('Get routes error:', error);
     res.status(500).json({ error: 'Failed to fetch routes' });
@@ -1288,14 +1562,14 @@ app.get('/api/dashboard/stats', authenticate, async (req, res) => {
         [profileId]
       );
       const totalSales = await query(
-        'SELECT COALESCE(SUM(final_price * quantity), 0) as total FROM orders o JOIN produce_listings l ON o.listing_id = l.id WHERE l.farmer_id = $1 AND o.order_status = $2',
+        'SELECT COALESCE(SUM(o.final_price * o.quantity), 0) as total FROM orders o JOIN produce_listings l ON o.listing_id = l.id WHERE l.farmer_id = $1 AND o.order_status = $2',
         [profileId, 'COMPLETED']
       );
       
       stats.totalListings = parseInt(listings.rows[0].count);
       stats.activeListings = parseInt(activeListings.rows[0].count);
       stats.totalSales = parseFloat(totalSales.rows[0].total);
-    } else if (req.userRole === 'BUYER') {
+    } else if (req.userRole === 'BUYER' || req.userRole === 'CONSUMER') {
       const orders = await query(
         'SELECT COUNT(*) as count FROM orders WHERE buyer_id = $1',
         [profileId]
