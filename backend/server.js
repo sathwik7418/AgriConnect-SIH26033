@@ -12,6 +12,7 @@ const varietyProvider = require('./providers/variety');
 const historicalProvider = require('./providers/historical');
 const routingProvider = require('./providers/routing');
 const supplyDemandMatcher = require('./services/supplyDemand');
+const emailProvider = require('./providers/email');
 
 dotenv.config();
 
@@ -89,6 +90,18 @@ app.post('/api/auth/register', async (req, res) => {
   if (!email || !password || !role) {
     return res.status(400).json({ error: 'Email, password, and role are required' });
   }
+  
+  // Validate email format
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(email)) {
+    return res.status(400).json({ error: 'Invalid email format' });
+  }
+
+  // Validate password length
+  if (password.length < 6) {
+    return res.status(400).json({ error: 'Password must be at least 6 characters long' });
+  }
+
   try {
     const existingUser = await query('SELECT id FROM users WHERE email = $1', [email]);
     if (existingUser.rows.length > 0) {
@@ -103,38 +116,41 @@ app.post('/api/auth/register', async (req, res) => {
     const otpExpires = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
     const cooldown = new Date(Date.now() + 60 * 1000); // 60 seconds
     
-    const result = await query(
-      `INSERT INTO users (email, password, role, phone, is_verified, verification_otp, otp_expires_at, otp_attempts, otp_cooldown_until) 
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id, email, role, is_verified`,
-      [email, hashedPassword, role, phone, false, hashedOtp, otpExpires, 0, cooldown]
-    );
+    // Transactional creation of unverified user
+    await query('BEGIN');
+    try {
+      const result = await query(
+        `INSERT INTO users (email, password, role, phone, is_verified, verification_otp, otp_expires_at, otp_attempts, otp_cooldown_until) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id, email, role, is_verified`,
+        [email, hashedPassword, role, phone, false, hashedOtp, otpExpires, 0, cooldown]
+      );
 
-    if (process.env.OTP_PROVIDER === 'twilio') {
-      console.log(`[Twilio OTP] Trigger SMS verification for ${phone || email}`);
-    } else {
-      console.log(`[DEV OTP MOCK] Generated OTP for ${email}: ${rawOtp}`);
+      // Attempt to send transactional email OTP through Brevo
+      await emailProvider.sendVerificationOTP(email, rawOtp);
+
+      await query('COMMIT');
+      
+      const responsePayload = { 
+        requiresVerification: true,
+        message: 'Verification code sent to your email'
+      };
+      
+      if (process.env.NODE_ENV !== 'production') {
+        responsePayload.devOtp = rawOtp;
+      }
+      
+      res.status(201).json(responsePayload);
+    } catch (dbErr) {
+      await query('ROLLBACK');
+      throw dbErr;
     }
-    
-    const token = jwt.sign({ userId: result.rows[0].id, role: result.rows[0].role }, JWT_SECRET, { expiresIn: '7d' });
-    
-    const responsePayload = { 
-      user: result.rows[0], 
-      token,
-      message: 'Registration successful! Verification code sent.'
-    };
-    
-    if (process.env.NODE_ENV !== 'production') {
-      responsePayload.devOtp = rawOtp;
-    }
-    
-    res.status(201).json(responsePayload);
   } catch (error) {
     console.error('Registration error:', error);
-    res.status(500).json({ error: 'Registration failed' });
+    res.status(500).json({ error: error.message || 'Registration failed' });
   }
 });
 
-app.post('/api/auth/verify-otp', async (req, res) => {
+const verifyEmailHandler = async (req, res) => {
   const { email, otp } = req.body;
   if (!email || !otp) {
     return res.status(400).json({ error: 'Email and OTP are required' });
@@ -192,9 +208,12 @@ app.post('/api/auth/verify-otp', async (req, res) => {
     console.error('Verify OTP error:', error);
     res.status(500).json({ error: 'Verification failed' });
   }
-});
+};
 
-app.post('/api/auth/resend-otp', async (req, res) => {
+app.post('/api/auth/verify-email', verifyEmailHandler);
+app.post('/api/auth/verify-otp', verifyEmailHandler);
+
+const resendVerificationHandler = async (req, res) => {
   const { email } = req.body;
   if (!email) {
     return res.status(400).json({ error: 'Email is required' });
@@ -202,7 +221,8 @@ app.post('/api/auth/resend-otp', async (req, res) => {
   try {
     const userRes = await query('SELECT * FROM users WHERE email = $1', [email]);
     if (userRes.rows.length === 0) {
-      return res.status(404).json({ error: 'User not found' });
+      // Prevent account enumeration by returning a mock success response
+      return res.json({ success: true, message: 'If the email exists, a new verification code has been sent.' });
     }
     const user = userRes.rows[0];
     
@@ -225,10 +245,11 @@ app.post('/api/auth/resend-otp', async (req, res) => {
       [hashedOtp, otpExpires, cooldown, user.id]
     );
     
-    if (process.env.OTP_PROVIDER === 'twilio') {
-      console.log(`[Twilio OTP] Resend SMS verification for ${user.phone || email}`);
-    } else {
-      console.log(`[DEV OTP MOCK] Resent OTP for ${email}: ${rawOtp}`);
+    try {
+      await emailProvider.sendVerificationOTP(email, rawOtp);
+    } catch (sendErr) {
+      console.error('Failed to send verification email:', sendErr);
+      return res.status(502).json({ error: 'Failed to send verification email. Please try again later.' });
     }
     
     const responsePayload = { success: true, message: 'Verification code resent successfully.' };
@@ -240,7 +261,10 @@ app.post('/api/auth/resend-otp', async (req, res) => {
     console.error('Resend OTP error:', error);
     res.status(500).json({ error: 'Failed to resend verification code' });
   }
-});
+};
+
+app.post('/api/auth/resend-verification', resendVerificationHandler);
+app.post('/api/auth/resend-otp', resendVerificationHandler);
 
 app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body;
@@ -257,7 +281,11 @@ app.post('/api/auth/login', async (req, res) => {
     }
     
     if (!user.is_verified) {
-      return res.status(403).json({ error: 'Account not verified. Please verify your account first.' });
+      return res.status(403).json({ 
+        error: 'Account not verified. Please verify your email first.',
+        requiresVerification: true,
+        email: user.email
+      });
     }
     
     const token = jwt.sign({ userId: user.id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });

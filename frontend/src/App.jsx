@@ -8,6 +8,7 @@ import Logistics from './pages/Logistics';
 import Impact from './pages/Impact';
 import Login from './pages/Login';
 import Register from './pages/Register';
+import VerifyEmail from './pages/VerifyEmail';
 import FarmerDashboard from './pages/FarmerDashboard';
 import BuyerDashboard from './pages/BuyerDashboard';
 import AdminDashboard from './pages/AdminDashboard';
@@ -35,6 +36,7 @@ function AppRoutes() {
     <Routes>
       <Route path="/login" element={user ? <Navigate to="/" /> : <Login />} />
       <Route path="/register" element={user ? <Navigate to="/" /> : <Register />} />
+      <Route path="/verify-email" element={user && user.is_verified ? <Navigate to="/" /> : <VerifyEmail />} />
       <Route path="/onboard" element={user && !hasProfile ? <Onboarding /> : <Navigate to="/" />} />
       <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
         <Route index element={

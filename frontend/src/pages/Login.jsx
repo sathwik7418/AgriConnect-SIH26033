@@ -19,7 +19,11 @@ export default function Login() {
       await login(email, password);
       navigate('/');
     } catch (err) {
-      setError(err.response?.data?.error || 'Login failed');
+      if (err.response?.data?.requiresVerification) {
+        navigate('/verify-email', { state: { email: err.response.data.email || email } });
+      } else {
+        setError(err.response?.data?.error || 'Login failed');
+      }
     } finally {
       setLoading(false);
     }
@@ -34,7 +38,11 @@ export default function Login() {
       await login(email, 'password123');
       navigate('/');
     } catch (err) {
-      setError(err.response?.data?.error || 'Login failed');
+      if (err.response?.data?.requiresVerification) {
+        navigate('/verify-email', { state: { email: err.response.data.email || email } });
+      } else {
+        setError(err.response?.data?.error || 'Login failed');
+      }
     } finally {
       setLoading(false);
     }

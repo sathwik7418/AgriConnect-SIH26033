@@ -65,6 +65,20 @@ export function AuthProvider({ children }) {
 
   const register = async (data) => {
     const res = await authAPI.register(data);
+    if (res.data && res.data.requiresVerification) {
+      return res.data;
+    }
+    const { user: userData, token: newToken } = res.data;
+    setUser(userData);
+    setToken(newToken);
+    localStorage.setItem('token', newToken);
+    localStorage.setItem('user', JSON.stringify(userData));
+    await fetchProfile(newToken);
+    return userData;
+  };
+
+  const verifyEmail = async (email, otp) => {
+    const res = await authAPI.verifyEmail({ email, otp });
     const { user: userData, token: newToken } = res.data;
     setUser(userData);
     setToken(newToken);
@@ -84,7 +98,7 @@ export function AuthProvider({ children }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, token, loading, login, register, logout, profile, hasProfile, checkingProfile, fetchProfile }}>
+    <AuthContext.Provider value={{ user, token, loading, login, register, logout, profile, hasProfile, checkingProfile, fetchProfile, verifyEmail }}>
       {children}
     </AuthContext.Provider>
   );
