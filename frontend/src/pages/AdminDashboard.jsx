@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { adminAPI, marketAPI } from '../services/api';
-import { Users, ShoppingCart, BarChart3, Truck, RefreshCw, Database, Server, CheckCircle, AlertTriangle } from 'lucide-react';
+import { Users, ShoppingCart, BarChart3, Truck, RefreshCw, Database, Server, CheckCircle, AlertTriangle, Loader2 } from 'lucide-react';
 
 export default function AdminDashboard() {
   const [stats, setStats] = useState(null);
@@ -9,190 +9,141 @@ export default function AdminDashboard() {
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState(null);
 
-  useEffect(() => {
-    loadStats();
-  }, []);
+  useEffect(() => { loadStats(); }, []);
 
   const loadStats = async () => {
-    setLoading(true);
-    setError('');
-    try {
-      const res = await adminAPI.getStats();
-      setStats(res.data);
-    } catch (err) {
-      setError(err.response?.data?.error || 'Failed to load system statistics');
-    } finally {
-      setLoading(false);
-    }
+    setLoading(true); setError('');
+    try { const res = await adminAPI.getStats(); setStats(res.data); }
+    catch (err) { setError(err.response?.data?.error || 'Failed to load system statistics'); }
+    finally { setLoading(false); }
   };
 
   const handleSync = async () => {
-    setSyncing(true);
-    setSyncResult(null);
+    setSyncing(true); setSyncResult(null);
     try {
       const res = await marketAPI.sync();
-      setSyncResult({
-        success: true,
-        message: `Sync completed successfully! Stored ${res.data.records} new records, skipped ${res.data.skipped || 0}.`,
-        timestamp: new Date().toLocaleTimeString()
-      });
+      setSyncResult({ success: true, message: `Sync completed! ${res.data.records} new records, ${res.data.skipped || 0} skipped.`, timestamp: new Date().toLocaleTimeString() });
       await loadStats();
-    } catch (err) {
-      setSyncResult({
-        success: false,
-        message: err.response?.data?.error || 'Sync failed. Please verify Mandi API key configuration in .env.'
-      });
-    } finally {
-      setSyncing(false);
-    }
+    } catch (err) { setSyncResult({ success: false, message: err.response?.data?.error || 'Sync failed.' }); }
+    finally { setSyncing(false); }
   };
 
-  if (loading) return <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-green-600"></div></div>;
+  if (loading) return (
+    <div className="flex justify-center py-16">
+      <div className="w-8 h-8 border-2 rounded-full animate-spin" style={{ borderColor: 'var(--bg-overlay)', borderTopColor: 'var(--accent)' }} />
+    </div>
+  );
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 animate-fade-in-up">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">Admin Control Center</h1>
-        <p className="text-gray-500 text-sm">System administration and data health cockpit</p>
+        <h1 className="text-2xl font-bold gradient-text">Admin Control Center</h1>
+        <p className="text-sm" style={{ color: 'var(--text-muted)' }}>System administration and data health</p>
       </div>
 
-      {error && <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">{error}</div>}
-
-      {/* Grid of Key Stats */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* User Stats Card */}
-        <div className="bg-white rounded-xl p-5 border card-shadow">
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-sm font-semibold text-gray-500">System Users</span>
-            <div className="bg-blue-50 p-2 rounded-lg text-blue-600"><Users className="h-5 w-5" /></div>
-          </div>
-          <p className="text-2xl font-bold text-gray-900">{stats?.users?.total || 0}</p>
-          <div className="mt-2 text-xs text-gray-500 grid grid-cols-3 gap-1 border-t pt-2">
-            <div>👨‍🌾 Farmers: <span className="font-semibold">{stats?.users?.farmers || 0}</span></div>
-            <div>💼 Buyers: <span className="font-semibold">{stats?.users?.buyers || 0}</span></div>
-            <div>🛒 Cons: <span className="font-semibold">{stats?.users?.consumers || 0}</span></div>
-          </div>
+      {error && (
+        <div className="rounded-lg px-4 py-3 text-sm" style={{ background: 'rgba(239,68,68,0.10)', color: '#dc2626', border: '1px solid rgba(239,68,68,0.15)' }}>
+          {error}
         </div>
+      )}
 
-        {/* Trade Value Card */}
-        <div className="bg-white rounded-xl p-5 border card-shadow">
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-sm font-semibold text-gray-500">Marketplace Volume</span>
-            <div className="bg-green-50 p-2 rounded-lg text-green-600"><ShoppingCart className="h-5 w-5" /></div>
+      {/* Stats Grid */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 stagger-children">
+        {[
+          { icon: Users, label: 'System Users', value: stats?.users?.total || 0, sub: `Farmers: ${stats?.users?.farmers || 0} | Buyers: ${stats?.users?.buyers || 0}`, color: 'var(--info)', bg: 'rgba(59,130,246,0.12)' },
+          { icon: ShoppingCart, label: 'Marketplace Volume', value: `₹${parseFloat(stats?.marketplace?.totalValue || 0).toLocaleString()}`, sub: `${stats?.marketplace?.activeListings || 0} active listings`, color: 'var(--accent)', bg: 'rgba(34,197,94,0.1)' },
+          { icon: BarChart3, label: 'Live Mandi Prices', value: stats?.marketData?.mandiCount || 0, sub: `Gov: ${stats?.marketData?.govCount || 0} records`, color: 'var(--warning)', bg: 'rgba(245,158,11,0.1)' },
+          { icon: Database, label: 'Historical Database', value: (stats?.historicalData?.count || 0).toLocaleString(), sub: `${stats?.historicalData?.minDate ? new Date(stats.historicalData.minDate).getFullYear() : 'N/A'} - ${stats?.historicalData?.maxDate ? new Date(stats.historicalData.maxDate).getFullYear() : 'N/A'}`, color: '#a855f7', bg: 'rgba(168,85,247,0.1)' },
+        ].map(({ icon: Icon, label, value, sub, color, bg }) => (
+          <div key={label} className="card-surface p-5 hover-lift">
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-sm font-semibold" style={{ color: 'var(--text-muted)' }}>{label}</span>
+              <div className="p-2 rounded-lg" style={{ background: bg }}><Icon className="h-5 w-5" style={{ color }} /></div>
+            </div>
+            <p className="text-2xl font-bold font-numeric" style={{ color: 'var(--text-primary)' }}>{value}</p>
+            <p className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>{sub}</p>
           </div>
-          <p className="text-2xl font-bold text-green-700 font-numeric">Rs{parseFloat(stats?.marketplace?.totalValue || 0).toLocaleString()}</p>
-          <div className="mt-2 text-xs text-gray-500 flex justify-between border-t pt-2">
-            <span>Listings: <span className="font-semibold">{stats?.marketplace?.activeListings || 0} active</span></span>
-            <span>Orders: <span className="font-semibold">{stats?.marketplace?.completedOrders || 0} / {stats?.marketplace?.totalOrders || 0}</span></span>
-          </div>
-        </div>
-
-        {/* Mandi Records Card */}
-        <div className="bg-white rounded-xl p-5 border card-shadow">
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-sm font-semibold text-gray-500">Live Mandi Prices</span>
-            <div className="bg-amber-50 p-2 rounded-lg text-amber-600"><BarChart3 className="h-5 w-5" /></div>
-          </div>
-          <p className="text-2xl font-bold text-gray-900">{stats?.marketData?.mandiCount || 0}</p>
-          <div className="mt-2 text-xs text-gray-500 flex justify-between border-t pt-2">
-            <span>Gov APIs: <span className="font-semibold text-gray-800">{stats?.marketData?.govCount || 0}</span></span>
-            <span>Sync Source: <span className="font-semibold text-gray-800">mandi_api</span></span>
-          </div>
-        </div>
-
-        {/* Historical Database Card */}
-        <div className="bg-white rounded-xl p-5 border card-shadow">
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-sm font-semibold text-gray-500">Historical Database</span>
-            <div className="bg-purple-50 p-2 rounded-lg text-purple-600"><Database className="h-5 w-5" /></div>
-          </div>
-          <p className="text-2xl font-bold text-gray-900">{(stats?.historicalData?.count || 0).toLocaleString()}</p>
-          <div className="mt-2 text-xs text-gray-500 border-t pt-2">
-            <span>Range: <span className="font-semibold">{stats?.historicalData?.minDate ? new Date(stats.historicalData.minDate).getFullYear() : 'N/A'} - {stats?.historicalData?.maxDate ? new Date(stats.historicalData.maxDate).getFullYear() : 'N/A'}</span></span>
-          </div>
-        </div>
+        ))}
       </div>
 
-      {/* Main Admin Section */}
+      {/* Main Admin Sections */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Sync panel */}
-        <div className="bg-white rounded-xl border p-5 card-shadow space-y-4 lg:col-span-2">
-          <div className="border-b pb-2 flex justify-between items-center">
-            <h3 className="font-bold text-gray-900 text-base flex items-center gap-1.5">
-              <Server className="h-5 w-5 text-green-600" />
-              Mandi Ingestion & Synchronization
+        {/* Sync Panel */}
+        <div className="card-surface p-5 space-y-4 lg:col-span-2">
+          <div className="border-b pb-2 flex justify-between items-center" style={{ borderColor: 'var(--border)' }}>
+            <h3 className="font-bold text-base flex items-center gap-1.5" style={{ color: 'var(--text-primary)' }}>
+              <Server className="h-5 w-5" style={{ color: 'var(--accent)' }} />
+              Mandi Ingestion & Sync
             </h3>
             {stats?.marketData?.latestSync && (
-              <span className="text-[10px] text-gray-400 font-semibold bg-gray-50 px-2 py-0.5 border rounded">
-                Last Sync: {new Date(stats.marketData.latestSync).toLocaleString()}
+              <span className="text-[10px] font-semibold px-2 py-0.5 rounded" style={{ background: 'var(--bg-elevated)', color: 'var(--text-muted)', border: '1px solid var(--border)' }}>
+                Last: {new Date(stats.marketData.latestSync).toLocaleString()}
               </span>
             )}
           </div>
-          <p className="text-sm text-gray-500">
-            Triggers manual retrieval of fresh commodity price arrivals from Gov APIs (APMC Mandis) to populate price charts and guide farmer listings.
+          <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+            Triggers retrieval of fresh commodity prices from Gov APIs (APMC Mandis).
           </p>
-
           <div className="flex flex-wrap items-center gap-4">
-            <button
-              onClick={handleSync}
-              disabled={syncing}
-              className="bg-green-600 text-white px-5 py-2.5 rounded-lg text-sm font-semibold hover:bg-green-700 disabled:opacity-50 flex items-center gap-2"
-            >
-              <RefreshCw className={`h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
-              {syncing ? 'Syncing Mandi Records...' : 'Sync Market Prices'}
+            <button onClick={handleSync} disabled={syncing}
+              className="btn-primary flex items-center gap-2 disabled:opacity-50">
+              {syncing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              {syncing ? 'Syncing...' : 'Sync Market Prices'}
             </button>
-            <span className="text-xs text-gray-400">
-              * Resolves coordinate calculations dynamically.
-            </span>
           </div>
-
           {syncResult && (
-            <div className={`p-4 rounded-lg text-sm border flex items-start gap-2 ${
-              syncResult.success ? 'bg-green-50 border-green-200 text-green-800' : 'bg-red-50 border-red-200 text-red-800'
-            }`}>
-              {syncResult.success ? <CheckCircle className="h-5 w-5 text-green-600 shrink-0 mt-0.5" /> : <AlertTriangle className="h-5 w-5 text-red-600 shrink-0 mt-0.5" />}
+            <div className={`p-4 rounded-lg text-sm flex items-start gap-2 ${syncResult.success ? '' : ''}`}
+              style={{
+                background: syncResult.success ? 'rgba(34,197,94,0.10)' : 'rgba(239,68,68,0.10)',
+                color: syncResult.success ? 'var(--accent)' : '#dc2626',
+                border: `1px solid ${syncResult.success ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)'}`
+              }}>
+              {syncResult.success ? <CheckCircle className="h-5 w-5 shrink-0 mt-0.5" /> : <AlertTriangle className="h-5 w-5 shrink-0 mt-0.5" />}
               <div>
                 <p className="font-semibold">{syncResult.success ? 'Sync Succeeded' : 'Sync Failed'}</p>
-                <p className="text-xs mt-0.5">{syncResult.message}</p>
-                {syncResult.timestamp && <p className="text-[10px] text-gray-400 mt-1">Completed at: {syncResult.timestamp}</p>}
+                <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>{syncResult.message}</p>
+                {syncResult.timestamp && <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>At: {syncResult.timestamp}</p>}
               </div>
             </div>
           )}
         </div>
 
-        {/* System & Logistics status */}
-        <div className="bg-white rounded-xl border p-5 card-shadow space-y-4">
-          <div className="border-b pb-2">
-            <h3 className="font-bold text-gray-900 text-base flex items-center gap-1.5">
-              <Truck className="h-5 w-5 text-blue-600" />
-              Logistics & Integration Status
+        {/* System Status */}
+        <div className="card-surface p-5 space-y-4">
+          <div className="border-b pb-2" style={{ borderColor: 'var(--border)' }}>
+            <h3 className="font-bold text-base flex items-center gap-1.5" style={{ color: 'var(--text-primary)' }}>
+              <Truck className="h-5 w-5" style={{ color: 'var(--info)' }} />
+              Logistics & Health
             </h3>
           </div>
-
           <div className="space-y-3.5 text-sm">
-            <div className="flex justify-between items-center">
-              <span className="text-gray-500 font-semibold">OSRM Routing Provider</span>
-              <span className="px-2 py-0.5 bg-blue-50 text-blue-700 text-xs rounded-full font-bold border border-blue-100 uppercase">
-                {stats?.logistics?.provider || 'OSRM'}
-              </span>
-            </div>
-
-            <div className="flex justify-between items-center">
-              <span className="text-gray-500 font-semibold">Provider Connection</span>
-              <span className="px-2 py-0.5 bg-green-50 text-green-700 text-xs rounded-full font-bold border border-green-100 uppercase">
-                ONLINE
-              </span>
-            </div>
-
-            <div className="flex justify-between items-center">
-              <span className="text-gray-500 font-semibold">Logistics Pricing Model</span>
-              <span className="text-gray-700 font-semibold text-xs">
-                Rs 9.5/km (min Rs300)
-              </span>
-            </div>
-
-            <div className="pt-3 border-t text-xs text-gray-400 leading-relaxed">
-              <strong>Routing Health Check:</strong> Distance and duration estimates are resolved dynamically. If OpenRouteService is un-configured or times out, the system automatically redirects query coordinates to OSRM's public routing service.
+            {[
+              ['Routing Provider', stats?.logistics?.provider || 'OSRM'],
+              ['Active Routes', stats?.logistics?.activeRoutes || 0],
+              ['Completed Deliveries', stats?.logistics?.completedDeliveries || 0],
+              ['Total Distance', `${stats?.logistics?.totalDistanceKm || 0} km`],
+              ['Transport Volume', `₹${stats?.logistics?.totalTransportCost || 0}`],
+            ].map(([label, value]) => (
+              <div key={label} className="flex justify-between items-center">
+                <span style={{ color: 'var(--text-muted)' }} className="font-semibold">{label}</span>
+                <span className="font-bold font-numeric" style={{ color: 'var(--text-primary)' }}>{value}</span>
+              </div>
+            ))}
+            <div className="pt-3 border-t space-y-2" style={{ borderColor: 'var(--border)' }}>
+              <div className="flex justify-between items-center text-xs">
+                <span style={{ color: 'var(--text-muted)' }} className="font-semibold">Database</span>
+                <span className="font-bold" style={{ color: 'var(--accent)' }}>● {stats?.health?.database || 'UP'}</span>
+              </div>
+              <div className="flex justify-between items-center text-xs">
+                <span style={{ color: 'var(--text-muted)' }} className="font-semibold">Email Service</span>
+                <span className="font-bold" style={{ color: stats?.health?.email === 'CONFIGURED' ? 'var(--accent)' : 'var(--warning)' }}>
+                  ● {stats?.health?.email || 'UNCONFIGURED'}
+                </span>
+              </div>
+              <div className="flex justify-between items-center text-xs">
+                <span style={{ color: 'var(--text-muted)' }} className="font-semibold">Mandi Sync</span>
+                <span className="font-semibold uppercase" style={{ color: 'var(--text-primary)' }}>{stats?.syncJobs?.status || 'NONE'}</span>
+              </div>
             </div>
           </div>
         </div>

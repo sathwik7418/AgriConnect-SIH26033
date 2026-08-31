@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Sprout } from 'lucide-react';
+import { Sprout, Eye, EyeOff, ArrowRight, Loader2 } from 'lucide-react';
 
 export default function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const { login } = useAuth();
@@ -29,85 +30,89 @@ export default function Login() {
     }
   };
 
-  const quickLogin = async (email) => {
-    setEmail(email);
-    setPassword('password123');
-    setError('');
-    setLoading(true);
-    try {
-      await login(email, 'password123');
-      navigate('/');
-    } catch (err) {
-      if (err.response?.data?.requiresVerification) {
-        navigate('/verify-email', { state: { email: err.response.data.email || email } });
-      } else {
-        setError(err.response?.data?.error || 'Login failed');
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
-
   return (
-    <div className="min-h-screen bg-gradient-to-br from-green-50 to-emerald-100 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-8">
-        <div className="text-center mb-8">
-          <Sprout className="h-12 w-12 text-green-600 mx-auto mb-3" />
-          <h1 className="text-2xl font-bold text-gray-900">AgriConnect</h1>
-          <p className="text-gray-500 text-sm mt-1">SIH26033 - Smart Agriculture Platform</p>
+    <div className="min-h-screen flex items-center justify-center p-4 bg-atmospheric relative overflow-hidden">
+      <div className="w-full max-w-md animate-fade-in-up relative z-10">
+        {/* Logo */}
+        <div className="text-center mb-10">
+          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl mb-4 glow-ring animate-pulse-glow"
+            style={{ background: 'var(--accent-dim)' }}>
+            <Sprout className="h-7 w-7" style={{ color: 'var(--accent)' }} />
+          </div>
+          <h1 className="text-2xl font-bold gradient-text">
+            Welcome back
+          </h1>
+          <p className="text-sm mt-1.5" style={{ color: 'var(--text-muted)' }}>
+            Sign in to AgriConnect
+          </p>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
-              required
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
-              required
-            />
-          </div>
-          {error && <p className="text-red-600 text-sm">{error}</p>}
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full bg-green-600 text-white py-2.5 rounded-lg font-medium hover:bg-green-700 disabled:opacity-50 transition-colors"
-          >
-            {loading ? 'Signing in...' : 'Sign In'}
-          </button>
-        </form>
+        {/* Card */}
+        <div className="card-atmospheric hover-glow p-8">
+          <form onSubmit={handleSubmit} className="space-y-5 stagger-children">
+            {error && (
+              <div className="badge badge-danger rounded-lg px-4 py-3 text-sm font-medium flex items-center gap-2 w-full justify-start">
+                {error}
+              </div>
+            )}
 
-        <div className="mt-6">
-          <p className="text-center text-sm text-gray-500 mb-3">Quick Demo Login</p>
-          <div className="grid grid-cols-2 gap-2">
-            <button onClick={() => quickLogin('ramesh@farmer.com')} className="px-3 py-2 bg-green-50 text-green-700 rounded-lg text-sm font-medium hover:bg-green-100">
-              Farmer
+            <div>
+              <label className="block text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>Email</label>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="input-field"
+                placeholder="name@example.com"
+                required
+                autoComplete="email"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>Password</label>
+              <div className="relative">
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="input-field pr-11"
+                  placeholder="Enter your password"
+                  required
+                  autoComplete="current-password"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 p-1 rounded-md transition-colors"
+                  style={{ color: 'var(--text-muted)' }}
+                  onMouseEnter={(e) => e.currentTarget.style.color = 'var(--text-primary)'}
+                  onMouseLeave={(e) => e.currentTarget.style.color = 'var(--text-muted)'}
+                >
+                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              disabled={loading || !email || !password}
+              className="btn-primary w-full flex items-center justify-center gap-2 py-3 text-[15px]"
+            >
+              {loading ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <>Sign In <ArrowRight className="h-4 w-4" /></>
+              )}
             </button>
-            <button onClick={() => quickLogin('bigbasket@buyer.com')} className="px-3 py-2 bg-blue-50 text-blue-700 rounded-lg text-sm font-medium hover:bg-blue-100">
-              Buyer
-            </button>
-            <button onClick={() => quickLogin('admin@sih26033.com')} className="px-3 py-2 bg-purple-50 text-purple-700 rounded-lg text-sm font-medium hover:bg-purple-100">
-              Admin
-            </button>
-            <button onClick={() => quickLogin('rahul@consumer.com')} className="px-3 py-2 bg-orange-50 text-orange-700 rounded-lg text-sm font-medium hover:bg-orange-100">
-              Consumer
-            </button>
-          </div>
+          </form>
         </div>
 
-        <p className="text-center text-sm text-gray-500 mt-6">
-          Don't have an account? <Link to="/register" className="text-green-600 font-medium hover:underline">Register</Link>
+        <p className="text-center text-sm mt-6" style={{ color: 'var(--text-muted)' }}>
+          Don't have an account?{' '}
+          <Link to="/register" className="font-semibold transition-colors hover:underline" style={{ color: 'var(--accent)' }}>
+            Create account
+          </Link>
         </p>
       </div>
     </div>

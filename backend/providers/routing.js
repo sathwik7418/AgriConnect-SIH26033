@@ -1,6 +1,42 @@
 const https = require('https');
 const http = require('http');
 
+// ── Vehicle Catalogue (AgriConnect Estimation Parameters) ──
+const VEHICLE_CATALOGUE = {
+  MINI_TRUCK: {
+    id: 'MINI_TRUCK',
+    label: 'Mini Truck',
+    description: 'Tata Ace / similar',
+    capacityKg: 2000,
+    ratePerKm: 12,
+    loadingHandling: 80,
+  },
+  PICKUP_LCV: {
+    id: 'PICKUP_LCV',
+    label: 'Pickup / LCV',
+    description: 'Pickup truck / Light Commercial Vehicle',
+    capacityKg: 3000,
+    ratePerKm: 18,
+    loadingHandling: 120,
+  },
+  MEDIUM_TRUCK: {
+    id: 'MEDIUM_TRUCK',
+    label: 'Medium Truck',
+    description: 'Eicher / Tata 407 / similar',
+    capacityKg: 7000,
+    ratePerKm: 25,
+    loadingHandling: 200,
+  },
+  HEAVY_TRUCK: {
+    id: 'HEAVY_TRUCK',
+    label: 'Heavy Truck',
+    description: 'Multi-axle truck / 10+ tonnes',
+    capacityKg: 15000,
+    ratePerKm: 38,
+    loadingHandling: 350,
+  },
+};
+
 const locationCoords = {
   'pune': { lat: 18.5204, lng: 73.8567 },
   'mumbai': { lat: 19.0760, lng: 72.8777 },
@@ -196,14 +232,14 @@ class RoutingProvider {
     }
   }
 
-  async calculateRouteDetails(originName, destinationName) {
+  async calculateRouteDetails(originName, destinationName, vehicleType = 'PICKUP_LCV') {
     const origin = await this.geocode(originName);
     const destination = await this.geocode(destinationName);
     
     if (!origin || !destination) {
       return {
         success: false,
-        error: `Could not geocode locations. Origin: ${originName || 'missing'}, Destination: ${destinationName || 'missing'}`
+        error: "We couldn't verify this location. Please check the address."
       };
     }
     
@@ -211,11 +247,52 @@ class RoutingProvider {
     const result = await this.getRoute(origin, destination);
     if (result.success && result.route) {
       const distance = result.route.distanceKm;
-      // Calculate cost: Rs 9.5 per km, minimum Rs 300
-      result.route.estimatedCost = Math.max(300, Math.round(distance * 9.5));
+      const vehicle = VEHICLE_CATALOGUE[vehicleType] || VEHICLE_CATALOGUE.PICKUP_LCV;
+      
+      const transportCost = Math.max(300, Math.round(distance * vehicle.ratePerKm + vehicle.loadingHandling));
+      
+      result.route.estimatedCost = transportCost;
       result.route.isFallback = isFallback;
+      result.route.vehicle = {
+        id: vehicle.id,
+        label: vehicle.label,
+        description: vehicle.description,
+        capacityKg: vehicle.capacityKg,
+        ratePerKm: vehicle.ratePerKm,
+        loadingHandling: vehicle.loadingHandling,
+      };
+      result.route.breakdown = {
+        distanceKm: distance,
+        ratePerKm: vehicle.ratePerKm,
+        distanceCost: Math.round(distance * vehicle.ratePerKm),
+        loadingHandling: vehicle.loadingHandling,
+        totalEstimate: transportCost,
+      };
     }
     return result;
+  }
+
+  calculateTransportCost(distanceKm, vehicleType = 'PICKUP_LCV') {
+    const vehicle = VEHICLE_CATALOGUE[vehicleType] || VEHICLE_CATALOGUE.PICKUP_LCV;
+    const transportCost = Math.max(300, Math.round(distanceKm * vehicle.ratePerKm + vehicle.loadingHandling));
+    return {
+      transportCost,
+      vehicle: {
+        id: vehicle.id,
+        label: vehicle.label,
+        description: vehicle.description,
+        capacityKg: vehicle.capacityKg,
+        ratePerKm: vehicle.ratePerKm,
+        loadingHandling: vehicle.loadingHandling,
+      },
+      breakdown: {
+        distanceKm,
+        ratePerKm: vehicle.ratePerKm,
+        distanceCost: Math.round(distanceKm * vehicle.ratePerKm),
+        loadingHandling: vehicle.loadingHandling,
+        totalEstimate: transportCost,
+      },
+    };
   }
 
   _httpGet(url) {
@@ -249,3 +326,4 @@ class RoutingProvider {
 }
 
 module.exports = new RoutingProvider();
+module.exports.VEHICLE_CATALOGUE = VEHICLE_CATALOGUE;

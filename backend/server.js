@@ -11,6 +11,7 @@ const mandiProvider = require('./providers/mandi');
 const varietyProvider = require('./providers/variety');
 const historicalProvider = require('./providers/historical');
 const routingProvider = require('./providers/routing');
+const { VEHICLE_CATALOGUE } = require('./providers/routing');
 const supplyDemandMatcher = require('./services/supplyDemand');
 const emailProvider = require('./providers/email');
 
@@ -774,7 +775,9 @@ app.get('/api/buyers/me', authenticate, async (req, res) => {
 });
 
 app.post('/api/orders', authenticate, async (req, res) => {
-  const { listingId, quantity, deliveryLocation, deliveryDate } = req.body;
+  const { listingId, quantity, deliveryLocation, deliveryDate, deliveryMode, vehicleType } = req.body;
+  const activeDeliveryMode = deliveryMode || 'TRANSPORT_PARTNER';
+  const activeVehicleType = vehicleType || 'PICKUP_LCV';
   try {
     const buyerProfileId = req.profileId;
     if (!buyerProfileId) {
@@ -811,10 +814,11 @@ app.post('/api/orders', authenticate, async (req, res) => {
 
     if (deliveryLocation && deliveryLocation !== buyer.location) {
       const geo = await routingProvider.geocode(deliveryLocation);
-      if (geo) {
-        destLat = geo.lat;
-        destLng = geo.lng;
+      if (!geo) {
+        return res.status(400).json({ error: "We couldn't verify this location. Please check the address." });
       }
+      destLat = geo.lat;
+      destLng = geo.lng;
     }
 
     // Origin geocode fallback check
@@ -822,15 +826,18 @@ app.post('/api/orders', authenticate, async (req, res) => {
     let originLng = listing.longitude;
     if (!originLat || !originLng) {
       const geo = await routingProvider.geocode(listing.location);
-      if (geo) {
-        originLat = geo.lat;
-        originLng = geo.lng;
+      if (!geo) {
+        return res.status(400).json({ error: "We couldn't verify the produce location. Please verify the listing." });
       }
+      originLat = geo.lat;
+      originLng = geo.lng;
     }
 
     let distanceKm = 0;
     let estimatedTime = '0 min';
     let transportCost = 0;
+    let routeBreakdown = null;
+    let vehicleInfo = null;
 
     if (originLat && originLng && destLat && destLng) {
       const routeRes = await routingProvider.getRoute(
@@ -840,11 +847,16 @@ app.post('/api/orders', authenticate, async (req, res) => {
       if (routeRes.success && routeRes.route) {
         distanceKm = routeRes.route.distanceKm;
         estimatedTime = routeRes.route.estimatedTime;
-        transportCost = Math.max(300, Math.round(distanceKm * 9.5));
+        if (activeDeliveryMode !== 'BUYER_PICKUP') {
+          const costResult = routingProvider.calculateTransportCost(distanceKm, activeVehicleType);
+          transportCost = costResult.transportCost;
+          routeBreakdown = costResult.breakdown;
+          vehicleInfo = costResult.vehicle;
+        }
       }
     }
 
-    if (transportCost === 0) {
+    if (activeDeliveryMode !== 'BUYER_PICKUP' && transportCost === 0) {
       return res.status(400).json({ error: "Could not calculate delivery route or transport cost. Please verify pickup and delivery locations." });
     }
     
@@ -857,8 +869,8 @@ app.post('/api/orders', authenticate, async (req, res) => {
     await query('BEGIN');
     try {
       const result = await query(
-        `INSERT INTO orders (buyer_id, listing_id, quantity, final_price, transport_cost, net_realization, delivery_location, delivery_date) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+        `INSERT INTO orders (buyer_id, listing_id, quantity, final_price, transport_cost, net_realization, delivery_location, delivery_date, delivery_mode) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
         [
           buyerProfileId,
           listingId,
@@ -867,7 +879,8 @@ app.post('/api/orders', authenticate, async (req, res) => {
           transportCost,
           netRealization,
           destLocation,
-          deliveryDate ? new Date(deliveryDate) : null
+          deliveryDate ? new Date(deliveryDate) : null,
+          activeDeliveryMode
         ]
       );
       
@@ -884,7 +897,7 @@ app.post('/api/orders', authenticate, async (req, res) => {
           distanceKm,
           estimatedTime,
           transportCost,
-          'truck_1ton',
+          activeVehicleType,
           'planned'
         ]
       );
@@ -894,6 +907,30 @@ app.post('/api/orders', authenticate, async (req, res) => {
         'UPDATE produce_listings SET quantity = $1, listing_status = $2 WHERE id = $3',
         [remainingQty, newStatus, listingId]
       );
+
+      // Create notification for farmer
+      const farmerProfileRes = await query('SELECT user_id FROM farmer_profiles WHERE id = $1', [listing.farmer_id]);
+      if (farmerProfileRes.rows.length > 0) {
+        const farmerUserId = farmerProfileRes.rows[0].user_id;
+        const buyerTypeStr = buyer.organization_type === 'INDIVIDUAL' ? 'Individual Consumer' : 'Business Buyer';
+        const transportInfo = activeDeliveryMode === 'BUYER_PICKUP' 
+          ? 'Buyer self-pickup (no delivery needed)' 
+          : `Distance: ${distanceKm} km, Est. Time: ${estimatedTime}, Est. Cost: ₹${transportCost}`;
+        
+        const richMessage = `New order received for ${reqQty} kg of ${listing.commodity}. Buyer Type: ${buyerTypeStr}. Fulfillment Mode: ${activeDeliveryMode.replace('_', ' ')}. Transport: ${transportInfo}. Reference: ${newOrder.id}. Go to the Orders page to review and confirm.`;
+
+        await query(
+          `INSERT INTO notifications (user_id, title, message, type, related_id) 
+           VALUES ($1, $2, $3, $4, $5)`,
+          [
+            farmerUserId,
+            'New Order Received',
+            richMessage,
+            'NEW_ORDER',
+            newOrder.id
+          ]
+        );
+      }
       
       await query('COMMIT');
       res.status(201).json(newOrder);
@@ -914,7 +951,8 @@ app.get('/api/orders/buyer/:buyerId', authenticate, async (req, res) => {
   try {
     const result = await query(
       `SELECT o.*, l.commodity, l.variety, l.grade, l.location as listing_location,
-              fp.name as farmer_name, fp.contact_number as farmer_phone
+              fp.name as farmer_name, 
+              CASE WHEN o.order_status IN ('PENDING', 'CANCELLED') THEN NULL ELSE fp.contact_number END as farmer_phone
        FROM orders o 
        LEFT JOIN produce_listings l ON o.listing_id = l.id 
        LEFT JOIN farmer_profiles fp ON l.farmer_id = fp.id
@@ -936,7 +974,8 @@ app.get('/api/orders/farmer/:farmerId', authenticate, async (req, res) => {
   try {
     const result = await query(
       `SELECT o.*, l.commodity, l.variety, l.grade, l.quantity as listed_quantity, 
-              fp.name as farmer_name, bp.name as buyer_name, bp.company_name as buyer_company
+              fp.name as farmer_name, bp.name as buyer_name, bp.company_name as buyer_company,
+              CASE WHEN o.order_status IN ('PENDING', 'CANCELLED') THEN NULL ELSE bp.contact_number END as buyer_phone
        FROM orders o
        JOIN produce_listings l ON o.listing_id = l.id
        JOIN farmer_profiles fp ON l.farmer_id = fp.id
@@ -952,6 +991,51 @@ app.get('/api/orders/farmer/:farmerId', authenticate, async (req, res) => {
   }
 });
 
+app.get('/api/notifications', authenticate, async (req, res) => {
+  try {
+    const result = await query(
+      'SELECT * FROM notifications WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50',
+      [req.userId]
+    );
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Get notifications error:', error);
+    res.status(500).json({ error: 'Failed to fetch notifications' });
+  }
+});
+
+app.put('/api/notifications/:id/read', authenticate, async (req, res) => {
+  try {
+    const result = await query(
+      'UPDATE notifications SET is_read = true WHERE id = $1 AND user_id = $2 RETURNING *',
+      [req.params.id, req.userId]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Notification not found' });
+    }
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Mark notification read error:', error);
+    res.status(500).json({ error: 'Failed to update notification status' });
+  }
+});
+
+app.delete('/api/notifications/:id', authenticate, async (req, res) => {
+  try {
+    const result = await query(
+      'DELETE FROM notifications WHERE id = $1 AND user_id = $2 RETURNING id',
+      [req.params.id, req.userId]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Notification not found' });
+    }
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Delete notification error:', error);
+    res.status(500).json({ error: 'Failed to delete notification' });
+  }
+});
+
 app.put('/api/orders/:id/status', authenticate, async (req, res) => {
   const { status: newStatus } = req.body;
   const orderId = req.params.id;
@@ -962,11 +1046,14 @@ app.put('/api/orders/:id/status', authenticate, async (req, res) => {
   }
 
   try {
-    // 1. Fetch current order with listing location
+    // 1. Fetch current order with listing location, commodity, and user identities
     const orderRes = await query(
-      `SELECT o.*, l.farmer_id, l.location as origin_location 
+      `SELECT o.*, l.farmer_id, l.location as origin_location, l.commodity,
+              bp.user_id as buyer_user_id, fp.user_id as farmer_user_id
        FROM orders o 
        LEFT JOIN produce_listings l ON o.listing_id = l.id 
+       LEFT JOIN buyer_profiles bp ON o.buyer_id = bp.id
+       LEFT JOIN farmer_profiles fp ON l.farmer_id = fp.id
        WHERE o.id = $1`,
       [orderId]
     );
@@ -978,7 +1065,7 @@ app.put('/api/orders/:id/status', authenticate, async (req, res) => {
     const order = orderRes.rows[0];
     const currentStatus = order.order_status;
 
-    // Define authorized status changes using DB ENUM values (PENDING, CONFIRMED, IN_TRANSIT, DELIVERED, COMPLETED, CANCELLED)
+    // Define authorized status changes using DB ENUM values (PENDING, CONFIRMED, PICKUP_READY, IN_TRANSIT, DELIVERED, COMPLETED, CANCELLED)
     if (newStatus === 'CONFIRMED') {
       if (currentStatus !== 'PENDING') {
         return res.status(400).json({ error: `Cannot change status to ${newStatus} from ${currentStatus}` });
@@ -987,17 +1074,34 @@ app.put('/api/orders/:id/status', authenticate, async (req, res) => {
         return res.status(403).json({ error: 'Unauthorized: Only the listing farmer can confirm this order' });
       }
     }
-    else if (newStatus === 'IN_TRANSIT') {
+    else if (newStatus === 'PICKUP_READY') {
       if (currentStatus !== 'CONFIRMED') {
         return res.status(400).json({ error: `Cannot change status to ${newStatus} from ${currentStatus}` });
+      }
+      if (order.farmer_id !== profileId) {
+        return res.status(403).json({ error: 'Unauthorized: Only the listing farmer can mark this order ready' });
+      }
+    }
+    else if (newStatus === 'IN_TRANSIT') {
+      if (order.delivery_mode === 'BUYER_PICKUP') {
+        return res.status(400).json({ error: 'Fulfillment mode BUYER_PICKUP does not support IN_TRANSIT status. Transition directly to DELIVERED.' });
+      }
+      if (currentStatus !== 'PICKUP_READY') {
+        return res.status(400).json({ error: `Cannot change status to ${newStatus} from ${currentStatus}. Order must be PICKUP_READY first.` });
       }
       if (order.farmer_id !== profileId) {
         return res.status(403).json({ error: 'Unauthorized' });
       }
     }
     else if (newStatus === 'DELIVERED') {
-      if (currentStatus !== 'IN_TRANSIT') {
-        return res.status(400).json({ error: `Cannot change status to ${newStatus} from ${currentStatus}` });
+      if (order.delivery_mode === 'BUYER_PICKUP') {
+        if (currentStatus !== 'PICKUP_READY') {
+          return res.status(400).json({ error: `Cannot change status to ${newStatus} from ${currentStatus} for BUYER_PICKUP. Order must be PICKUP_READY first.` });
+        }
+      } else {
+        if (currentStatus !== 'IN_TRANSIT') {
+          return res.status(400).json({ error: `Cannot change status to ${newStatus} from ${currentStatus} for ${order.delivery_mode}. Order must be IN_TRANSIT first.` });
+        }
       }
       if (order.farmer_id !== profileId) {
         return res.status(403).json({ error: 'Unauthorized' });
@@ -1012,8 +1116,8 @@ app.put('/api/orders/:id/status', authenticate, async (req, res) => {
       }
     }
     else if (newStatus === 'CANCELLED') {
-      if (currentStatus !== 'PENDING' && currentStatus !== 'CONFIRMED') {
-        return res.status(400).json({ error: 'Cannot cancel order once it is processed' });
+      if (currentStatus !== 'PENDING' && currentStatus !== 'CONFIRMED' && currentStatus !== 'PICKUP_READY') {
+        return res.status(400).json({ error: 'Cannot cancel order once it is in transit or delivered.' });
       }
       if (order.buyer_id !== profileId && order.farmer_id !== profileId) {
         return res.status(403).json({ error: 'Unauthorized' });
@@ -1030,24 +1134,93 @@ app.put('/api/orders/:id/status', authenticate, async (req, res) => {
       try {
         const origin = order.origin_location || 'Pune';
         const dest = order.delivery_location || 'Mumbai';
-        const routeData = await routingProvider.calculateRouteDetails(origin, dest);
-        if (routeData.success) {
-          transportCost = routeData.route.estimatedCost;
+        const routeRes = await routingProvider.getRoute(
+          await routingProvider.geocode(origin).then(g => g || { lat: 18.5204, lng: 73.8567 }),
+          await routingProvider.geocode(dest).then(g => g || { lat: 19.0760, lng: 72.8777 })
+        );
+        if (routeRes.success && routeRes.route) {
+          const existingRoute = await query('SELECT vehicle_type FROM routes WHERE order_id = $1 LIMIT 1', [orderId]);
+          const vehicleType = existingRoute.rows[0]?.vehicle_type || 'PICKUP_LCV';
+          const costResult = routingProvider.calculateTransportCost(routeRes.route.distanceKm, vehicleType);
+          transportCost = costResult.transportCost;
           netRealization = (parseFloat(order.final_price) * parseFloat(order.quantity)) - transportCost;
-          console.log(`Logistics Calculated. Distance: ${routeData.route.distanceKm}km, Cost: Rs${transportCost}, Net Realization: Rs${netRealization}`);
+          console.log(`Logistics Calculated. Distance: ${routeRes.route.distanceKm}km, Vehicle: ${vehicleType}, Cost: Rs${transportCost}, Net Realization: Rs${netRealization}`);
         }
       } catch (routingErr) {
         console.error('Logistics calculation failed during confirmation:', routingErr);
       }
     }
 
-    // 2. Perform Update
-    const result = await query(
-      'UPDATE orders SET order_status = $1, transport_cost = $2, net_realization = $3, updated_at = NOW() WHERE id = $4 RETURNING *',
-      [newStatus, transportCost, netRealization, orderId]
-    );
+    // Define notifications
+    let notificationUserId = null;
+    let notificationTitle = '';
+    let notificationMessage = '';
 
-    res.json(result.rows[0]);
+    if (newStatus === 'CONFIRMED') {
+      notificationUserId = order.buyer_user_id;
+      notificationTitle = 'Order Confirmed';
+      notificationMessage = `Your order for ${order.commodity} has been confirmed by the farmer.`;
+    } else if (newStatus === 'PICKUP_READY') {
+      notificationUserId = order.buyer_user_id;
+      notificationTitle = 'Order Ready for Pickup';
+      notificationMessage = `Your order for ${order.commodity} is ready for pickup.`;
+    } else if (newStatus === 'IN_TRANSIT') {
+      notificationUserId = order.buyer_user_id;
+      notificationTitle = 'Order In Transit';
+      notificationMessage = `Your order for ${order.commodity} is now in transit.`;
+    } else if (newStatus === 'DELIVERED') {
+      notificationUserId = order.buyer_user_id;
+      notificationTitle = 'Order Delivered';
+      notificationMessage = `Your order for ${order.commodity} has been delivered.`;
+    } else if (newStatus === 'COMPLETED') {
+      notificationUserId = order.farmer_user_id;
+      notificationTitle = 'Order Completed';
+      notificationMessage = `The buyer has marked your order for ${order.commodity} as completed.`;
+    } else if (newStatus === 'CANCELLED') {
+      if (profileId === order.farmer_id) {
+        notificationUserId = order.buyer_user_id;
+        notificationMessage = `The farmer has cancelled your order for ${order.commodity}.`;
+      } else {
+        notificationUserId = order.farmer_user_id;
+        notificationMessage = `The buyer has cancelled their order for ${order.commodity}.`;
+      }
+      notificationTitle = 'Order Cancelled';
+    }
+
+    // 2. Perform Update inside a transaction to ensure atomic route status updates and notifications
+    await query('BEGIN');
+    try {
+      const result = await query(
+        'UPDATE orders SET order_status = $1, transport_cost = $2, net_realization = $3, updated_at = NOW() WHERE id = $4 RETURNING *',
+        [newStatus, transportCost, netRealization, orderId]
+      );
+      
+      // Update associated route status
+      let routeStatus = 'planned';
+      if (newStatus === 'IN_TRANSIT') routeStatus = 'in_transit';
+      else if (newStatus === 'DELIVERED' || newStatus === 'COMPLETED') routeStatus = 'completed';
+      else if (newStatus === 'CANCELLED') routeStatus = 'cancelled';
+
+      await query(
+        'UPDATE routes SET status = $1, updated_at = NOW() WHERE order_id = $2',
+        [routeStatus, orderId]
+      );
+
+      // Insert notification if recipient was identified
+      if (notificationUserId) {
+        await query(
+          `INSERT INTO notifications (user_id, title, message, type, related_id) 
+           VALUES ($1, $2, $3, $4, $5)`,
+          [notificationUserId, notificationTitle, notificationMessage, 'ORDER_STATUS', orderId]
+        );
+      }
+
+      await query('COMMIT');
+      res.json(result.rows[0]);
+    } catch (dbErr) {
+      await query('ROLLBACK');
+      throw dbErr;
+    }
   } catch (error) {
     console.error('Update order status error:', error);
     res.status(500).json({ error: 'Failed to update order status' });
@@ -1090,62 +1263,138 @@ app.get('/api/market-prices', async (req, res) => {
 });
 
 app.get('/api/market-prices/daily-intelligence', async (req, res) => {
-  const { commodity, state } = req.query;
+  const { commodity, state, district, market } = req.query;
   if (!commodity) {
     return res.status(400).json({ error: 'Commodity is required' });
   }
+
+  const getScopeIntelligence = async (comm, st, dist, mkt) => {
+    let baseSql = 'WHERE commodity = $1';
+    const params = [comm.toUpperCase()];
+    let paramCount = 2;
+    
+    if (st && st !== 'ALL') {
+      baseSql += ` AND state = $${paramCount++}`;
+      params.push(st);
+    }
+    if (dist && dist !== 'ALL') {
+      baseSql += ` AND district = $${paramCount++}`;
+      params.push(dist);
+    }
+    if (mkt && mkt !== 'ALL') {
+      baseSql += ` AND market = $${paramCount++}`;
+      params.push(mkt);
+    }
+    
+    const dateRes = await query(
+      `SELECT MAX(arrival_date) as max_date FROM market_prices ${baseSql}`,
+      params
+    );
+    if (!dateRes.rows[0].max_date) {
+      return null;
+    }
+    const maxDate = dateRes.rows[0].max_date;
+    
+    const todayPricesRes = await query(
+      `SELECT modal_price, source FROM market_prices 
+       ${baseSql} AND arrival_date = $${paramCount}`,
+      [...params, maxDate]
+    );
+    
+    const prevDateRes = await query(
+      `SELECT MAX(arrival_date) as prev_date FROM market_prices 
+       ${baseSql} AND arrival_date < $${paramCount}`,
+      [...params, maxDate]
+    );
+    
+    const prevDate = prevDateRes.rows[0].prev_date;
+    let prevAverage = null;
+    let prevDateVal = null;
+    
+    if (prevDate) {
+      const prevPricesRes = await query(
+        `SELECT modal_price, source FROM market_prices 
+         ${baseSql} AND arrival_date = $${paramCount}`,
+        [...params, prevDate]
+      );
+      if (prevPricesRes.rows.length > 0) {
+        let sum = 0;
+        prevPricesRes.rows.forEach(r => {
+          const isQuintal = r.source === 'mandi_api' || r.source === 'historical_dataset' || r.source === 'agmarknet_historical';
+          const pricePerKg = isQuintal ? parseFloat(r.modal_price) / 100 : parseFloat(r.modal_price);
+          sum += pricePerKg;
+        });
+        prevAverage = sum / prevPricesRes.rows.length;
+        prevDateVal = prevDate;
+      }
+    }
+    
+    if (todayPricesRes.rows.length > 0) {
+      let sum = 0;
+      todayPricesRes.rows.forEach(r => {
+        const isQuintal = r.source === 'mandi_api' || r.source === 'historical_dataset' || r.source === 'agmarknet_historical';
+        const pricePerKg = isQuintal ? parseFloat(r.modal_price) / 100 : parseFloat(r.modal_price);
+        sum += pricePerKg;
+      });
+      const todayAverage = sum / todayPricesRes.rows.length;
+      
+      let difference = null;
+      let percentageChange = null;
+      let status = 'Comparison unavailable';
+      
+      if (prevAverage !== null) {
+        difference = todayAverage - prevAverage;
+        percentageChange = (difference / prevAverage) * 100;
+        status = 'success';
+      }
+      
+      return {
+        status,
+        todayPrice: todayAverage,
+        yesterdayPrice: prevAverage,
+        difference,
+        percentageChange,
+        todayDate: maxDate,
+        yesterdayDate: prevDateVal,
+        sampleSize: todayPricesRes.rows.length
+      };
+    }
+    
+    return null;
+  };
   
   try {
-    // 1. Get today's/latest modal price
-    const latestPriceRes = await query(
-      `SELECT modal_price, arrival_date, source FROM market_prices 
-       WHERE commodity = $1 ${state && state !== 'ALL' ? 'AND state = $2' : ''} 
-       ORDER BY arrival_date DESC LIMIT 1`,
-      state && state !== 'ALL' ? [commodity.toUpperCase(), state] : [commodity.toUpperCase()]
-    );
-    
-    if (latestPriceRes.rows.length === 0) {
-      return res.json({ status: 'Comparison unavailable', message: 'No data points found' });
+    // 1. Try Market level
+    if (market && market !== 'ALL') {
+      const intel = await getScopeIntelligence(commodity, state, district, market);
+      if (intel) {
+        return res.json({ status: 'success', scope: 'market', ...intel });
+      }
     }
     
-    const latestRecord = latestPriceRes.rows[0];
-    const arrivalDate = latestRecord.arrival_date;
-    
-    // 2. Get the previous modal price on a different arrival_date
-    const prevPriceRes = await query(
-      `SELECT modal_price, arrival_date, source FROM market_prices 
-       WHERE commodity = $1 ${state && state !== 'ALL' ? 'AND state = $2' : ''} AND arrival_date < $3
-       ORDER BY arrival_date DESC LIMIT 1`,
-      state && state !== 'ALL' ? [commodity.toUpperCase(), state, arrivalDate] : [commodity.toUpperCase(), arrivalDate]
-    );
-    
-    const isQuintalLatest = latestRecord.source === 'mandi_api' || latestRecord.source === 'historical_dataset' || latestRecord.source === 'agmarknet_historical';
-    const latestNormalized = isQuintalLatest ? parseFloat(latestRecord.modal_price) / 100 : parseFloat(latestRecord.modal_price);
-    
-    if (prevPriceRes.rows.length === 0) {
-      return res.json({ 
-        status: 'Comparison unavailable', 
-        todayPrice: latestNormalized,
-        message: 'No yesterday/previous record found to compare.' 
-      });
+    // 2. Try District level
+    if (district && district !== 'ALL') {
+      const intel = await getScopeIntelligence(commodity, state, district, null);
+      if (intel) {
+        return res.json({ status: 'success', scope: 'district', ...intel });
+      }
     }
     
-    const prevRecord = prevPriceRes.rows[0];
-    const isQuintalPrev = prevRecord.source === 'mandi_api' || prevRecord.source === 'historical_dataset' || prevRecord.source === 'agmarknet_historical';
-    const prevNormalized = isQuintalPrev ? parseFloat(prevRecord.modal_price) / 100 : parseFloat(prevRecord.modal_price);
+    // 3. Try State level
+    if (state && state !== 'ALL') {
+      const intel = await getScopeIntelligence(commodity, state, null, null);
+      if (intel) {
+        return res.json({ status: 'success', scope: 'state', ...intel });
+      }
+    }
     
-    const diff = latestNormalized - prevNormalized;
-    const pctChange = (diff / prevNormalized) * 100;
+    // 4. Fall back to National level
+    const intel = await getScopeIntelligence(commodity, null, null, null);
+    if (intel) {
+      return res.json({ status: 'success', scope: 'national', ...intel });
+    }
     
-    res.json({
-      status: 'success',
-      todayPrice: latestNormalized,
-      yesterdayPrice: prevNormalized,
-      difference: diff,
-      percentageChange: pctChange,
-      todayDate: latestRecord.arrival_date,
-      yesterdayDate: prevRecord.arrival_date
-    });
+    return res.json({ status: 'Comparison unavailable', message: 'No data points found' });
   } catch (error) {
     console.error('Get daily intelligence error:', error);
     res.status(500).json({ error: 'Failed to fetch daily price intelligence' });
@@ -1190,6 +1439,25 @@ app.get('/api/admin/stats', authenticate, async (req, res) => {
 
     const minMaxDate = await query("SELECT MIN(arrival_date) as min_date, MAX(arrival_date) as max_date FROM historical_market_prices");
 
+    // Logistics & routes analytics
+    const activeRoutes = await query("SELECT COUNT(*) as count FROM routes WHERE status = 'in_transit'");
+    const completedDeliveries = await query("SELECT COUNT(*) as count FROM routes WHERE status = 'completed'");
+    const totalDistance = await query("SELECT COALESCE(SUM(distance_km), 0) as total FROM routes");
+    const totalTransportCost = await query("SELECT COALESCE(SUM(estimated_cost), 0) as total FROM routes");
+    
+    // Ingestion jobs & health status
+    const latestSyncJob = await query("SELECT sync_status, error_message, started_at FROM market_data_sync ORDER BY started_at DESC LIMIT 1");
+    const emailProviderConfigured = !!(process.env.BREVO_API_KEY || (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASSWORD));
+
+    // Dynamic routing ping test
+    let routingOnline = false;
+    try {
+      const pingRes = await routingProvider.geocode('Pune');
+      routingOnline = !!pingRes;
+    } catch (e) {
+      console.warn('Admin stats routing check failed:', e.message);
+    }
+
     res.json({
       users: {
         total: parseInt(totalUsers.rows[0].count),
@@ -1216,7 +1484,21 @@ app.get('/api/admin/stats', authenticate, async (req, res) => {
       },
       logistics: {
         provider: process.env.ROUTING_PROVIDER || 'osrm',
-        configured: routingProvider.isConfigured()
+        configured: routingProvider.isConfigured(),
+        online: routingOnline,
+        activeRoutes: parseInt(activeRoutes.rows[0].count),
+        completedDeliveries: parseInt(completedDeliveries.rows[0].count),
+        totalDistanceKm: parseFloat(totalDistance.rows[0].total),
+        totalTransportCost: parseFloat(totalTransportCost.rows[0].total)
+      },
+      health: {
+        database: 'UP',
+        email: emailProviderConfigured ? 'CONFIGURED' : 'UNCONFIGURED'
+      },
+      syncJobs: {
+        status: latestSyncJob.rows[0]?.sync_status || 'NONE',
+        errorMessage: latestSyncJob.rows[0]?.error_message || null,
+        startedAt: latestSyncJob.rows[0]?.started_at || null
       }
     });
   } catch (error) {
@@ -1459,14 +1741,19 @@ app.get('/api/impact/summary', async (req, res) => {
   }
 });
 
+// Vehicle catalogue
+app.get('/api/vehicles', (req, res) => {
+  res.json(Object.values(VEHICLE_CATALOGUE));
+});
+
 // Routes (logistics)
 app.post('/api/routes/estimate', async (req, res) => {
-  const { origin, destination } = req.body;
+  const { origin, destination, vehicleType } = req.body;
   if (!origin || !destination) {
     return res.status(400).json({ error: 'Origin and destination are required' });
   }
   try {
-    const routeData = await routingProvider.calculateRouteDetails(origin, destination);
+    const routeData = await routingProvider.calculateRouteDetails(origin, destination, vehicleType || 'PICKUP_LCV');
     if (!routeData.success) {
       return res.status(400).json({ error: routeData.error });
     }

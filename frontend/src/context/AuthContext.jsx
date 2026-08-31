@@ -10,6 +10,7 @@ export function AuthProvider({ children }) {
   const [hasProfile, setHasProfile] = useState(false);
   const [checkingProfile, setCheckingProfile] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [profileError, setProfileError] = useState(false);
 
   const fetchProfile = async (currentToken) => {
     const activeToken = currentToken || token || localStorage.getItem('token');
@@ -33,6 +34,14 @@ export function AuthProvider({ children }) {
       console.error('Failed to fetch profile:', err);
       setProfile(null);
       setHasProfile(false);
+      if (err.response?.status === 401 || err.response?.status === 403) {
+        setUser(null);
+        setToken(null);
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+      } else {
+        setProfileError(true);
+      }
     } finally {
       setCheckingProfile(false);
     }
@@ -40,6 +49,7 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     const initAuth = async () => {
+      setProfileError(false);
       if (token) {
         const stored = localStorage.getItem('user');
         if (stored) {
@@ -93,12 +103,15 @@ export function AuthProvider({ children }) {
     setToken(null);
     setProfile(null);
     setHasProfile(false);
+    setProfileError(false);
     localStorage.removeItem('token');
     localStorage.removeItem('user');
   };
 
+  const clearProfileError = () => setProfileError(false);
+
   return (
-    <AuthContext.Provider value={{ user, token, loading, login, register, logout, profile, hasProfile, checkingProfile, fetchProfile, verifyEmail }}>
+    <AuthContext.Provider value={{ user, token, loading, login, register, logout, profile, hasProfile, profileError, clearProfileError, checkingProfile, fetchProfile, verifyEmail }}>
       {children}
     </AuthContext.Provider>
   );

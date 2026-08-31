@@ -57,7 +57,34 @@ async function migrate() {
         consumer.updated_at
       ]);
     }
-    console.log('✅ Successfully migrated consumer profiles to buyer_profiles table.');
+    // 5. Add notifications table
+    await query(`
+      CREATE TABLE IF NOT EXISTS notifications (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        title VARCHAR(255) NOT NULL,
+        message TEXT NOT NULL,
+        type VARCHAR(50) DEFAULT 'info',
+        related_id UUID,
+        is_read BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMP DEFAULT NOW() NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications(user_id, is_read);
+    `);
+    console.log('✅ Created notifications table and index if not exists.');
+
+    // 6. Add PICKUP_READY value to order_status enum
+    await query(`
+      ALTER TYPE order_status ADD VALUE IF NOT EXISTS 'PICKUP_READY' AFTER 'CONFIRMED';
+    `);
+    console.log('✅ Added PICKUP_READY to order_status enum in database.');
+
+    // 7. Add delivery_mode column to orders table if not exists
+    await query(`
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_mode VARCHAR(50) DEFAULT 'TRANSPORT_PARTNER';
+    `);
+    console.log('✅ Added delivery_mode column to orders table.');
+
     console.log('🎉 DB Migration Completed Successfully!');
   } catch (error) {
     console.error('❌ Migration failed:', error);

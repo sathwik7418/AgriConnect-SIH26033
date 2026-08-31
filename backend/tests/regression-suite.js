@@ -325,6 +325,39 @@ async function runRegression() {
   assert.strictEqual(postEstimateRoutesCount, initialRoutesCount, 'Estimate must not insert route records');
   console.log('✅ Confirmed zero database persistence during route estimation.');
 
+  // 13b. Invalid geocoding / route estimation during checkout verification
+  console.log('\nTest 13b: Invalid Geocoding & Order Rejection Check');
+  const badOrderRes = await fetch(`${BASE_URL}/orders`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${buyerToken}` },
+    body: JSON.stringify({
+      listingId: listing.id,
+      quantity: 10,
+      deliveryLocation: 'UnverifiableLoc@@@@'
+    })
+  });
+  assert.strictEqual(badOrderRes.status, 400, 'Must reject order placement with invalid location');
+  const badOrderData = await badOrderRes.json();
+  assert.strictEqual(badOrderData.error, "We couldn't verify this location. Please check the address.", 'Should return correct location verification message');
+  console.log('✅ Correctly blocked order creation for unverifiable destination address.');
+
+  // 13c. BUYER_PICKUP order placement and transport cost verification
+  console.log('\nTest 13c: BUYER_PICKUP Order Placement & Free Transport check');
+  const pickupOrderRes = await fetch(`${BASE_URL}/orders`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${buyerToken}` },
+    body: JSON.stringify({
+      listingId: listing.id,
+      quantity: 10,
+      deliveryLocation: buyerProfile.location,
+      deliveryMode: 'BUYER_PICKUP'
+    })
+  });
+  assert.strictEqual(pickupOrderRes.status, 201, 'Should place BUYER_PICKUP order successfully');
+  const pickupOrder = await pickupOrderRes.json();
+  assert.strictEqual(parseFloat(pickupOrder.transport_cost), 0, 'Transport cost for BUYER_PICKUP must be 0');
+  console.log('✅ Successfully placed BUYER_PICKUP order and locked transport cost at ₹0.');
+
   // 14. Order Placement (Server-side routing & transport cost calculation)
   console.log('\nTest 14: Order Placement & Route Lock');
   const orderRes = await fetch(`${BASE_URL}/orders`, {
@@ -345,10 +378,58 @@ async function runRegression() {
   assert.strictEqual(parseFloat(dbRoute.rows[0].estimated_cost), parseFloat(order.transport_cost));
   console.log(`✅ Order placed and route locked successfully. Linked Route ID: ${dbRoute.rows[0].id}`);
 
+  // 14a. Notification & Privacy Verification
+  console.log('\nTest 14a: Notification & Phone Number Privacy Check');
+  const farmerNotifications = await query('SELECT * FROM notifications WHERE user_id = (SELECT id FROM users WHERE email = $1)', [farmerEmail]);
+  assert.ok(farmerNotifications.rows.length > 0, 'Notification must be created for the farmer');
+  assert.strictEqual(farmerNotifications.rows[0].type, 'NEW_ORDER');
+  console.log('✅ In-app notification successfully created for farmer.');
+
+  const buyerOrdersRes = await fetch(`${BASE_URL}/orders/buyer/${buyerProfile.id}`, {
+    headers: { 'Authorization': `Bearer ${buyerToken}` }
+  });
+  const buyerOrders = await buyerOrdersRes.json();
+  const pendingOrder = buyerOrders.find(o => o.id === order.id);
+  assert.strictEqual(pendingOrder.farmer_phone, null, 'Farmer phone must be masked/null for PENDING orders');
+  console.log('✅ Farmer contact details successfully masked on PENDING.');
+
+  // 14b. Order Status Machine & Transition Checks
+  console.log('\nTest 14b: Order Status Transitions (PENDING -> CONFIRMED -> PICKUP_READY -> IN_TRANSIT)');
+  const confirmRes = await fetch(`${BASE_URL}/orders/${order.id}/status`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${farmerToken}` },
+    body: JSON.stringify({ status: 'CONFIRMED' })
+  });
+  assert.strictEqual(confirmRes.status, 200, 'Farmer must be able to confirm order');
+
+  const buyerOrdersConfirmedRes = await fetch(`${BASE_URL}/orders/buyer/${buyerProfile.id}`, {
+    headers: { 'Authorization': `Bearer ${buyerToken}` }
+  });
+  const buyerOrdersConfirmed = await buyerOrdersConfirmedRes.json();
+  const confirmedOrder = buyerOrdersConfirmed.find(o => o.id === order.id);
+  assert.ok(confirmedOrder.farmer_phone !== null, 'Farmer phone must be revealed for CONFIRMED orders');
+  console.log('✅ Farmer contact details successfully revealed on CONFIRMED.');
+
+  const pickupReadyRes = await fetch(`${BASE_URL}/orders/${order.id}/status`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${farmerToken}` },
+    body: JSON.stringify({ status: 'PICKUP_READY' })
+  });
+  assert.strictEqual(pickupReadyRes.status, 200, 'Farmer must be able to mark ready for pickup');
+  console.log('✅ Order successfully transitioned to PICKUP_READY.');
+
+  const inTransitRes = await fetch(`${BASE_URL}/orders/${order.id}/status`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${farmerToken}` },
+    body: JSON.stringify({ status: 'IN_TRANSIT' })
+  });
+  assert.strictEqual(inTransitRes.status, 200, 'Farmer must be able to dispatch order');
+  console.log('✅ Order successfully transitioned to IN_TRANSIT.');
+
   // 15. Listing Quantity Deduction
   console.log('\nTest 15: Quantity Deduction Check');
   const updatedListingRes = await query('SELECT quantity FROM produce_listings WHERE id = $1', [listing.id]);
-  assert.strictEqual(parseFloat(updatedListingRes.rows[0].quantity), 400, 'Listing stock quantity should decrement from 500 to 400');
+  assert.strictEqual(parseFloat(updatedListingRes.rows[0].quantity), 390, 'Listing stock quantity should decrement from 500 to 390');
   console.log('✅ Listing quantity decremented correctly.');
 
   // 16. Logistics Privacy Checks
@@ -384,8 +465,59 @@ async function runRegression() {
   assert.strictEqual(syncResNonAdmin.status, 403, 'APMC Sync must be forbidden for non-admins');
   console.log('✅ Non-admin APMC Sync access blocked successfully.');
 
-  // 18. Clean up created data
+  // 18. Localized Market Price Intelligence & Fallback check
+  console.log('\nTest 18: Localized Market Price Intelligence & Fallback check');
+  
+  const testPrices = [
+    { state: 'Telangana', district: 'Hyderabad', market: 'Hyderabad Mandi', commodity: 'BANANA', modal_price: 2400, arrival_date: new Date('2026-08-28T00:00:00Z'), source: 'mandi_api' },
+    { state: 'Telangana', district: 'Hyderabad', market: 'Hyderabad Mandi', commodity: 'BANANA', modal_price: 2200, arrival_date: new Date('2026-08-27T00:00:00Z'), source: 'mandi_api' },
+    { state: 'Telangana', district: 'Rangareddy', market: 'Secunderabad Mandi', commodity: 'BANANA', modal_price: 2500, arrival_date: new Date('2026-08-28T00:00:00Z'), source: 'mandi_api' },
+    { state: 'Andhra Pradesh', district: 'Kurnool', market: 'Kurnool Mandi', commodity: 'BANANA', modal_price: 2000, arrival_date: new Date('2026-08-28T00:00:00Z'), source: 'mandi_api' }
+  ];
+
+  for (const tp of testPrices) {
+    await query(
+      `INSERT INTO market_prices (state, district, market, commodity, modal_price, min_price, max_price, arrival_date, source, data_freshness)
+       VALUES ($1, $2, $3, $4, $5, $5, $5, $6, $7, 'fresh')
+       ON CONFLICT (state, district, market, commodity, arrival_date) DO UPDATE SET modal_price = EXCLUDED.modal_price`,
+      [tp.state, tp.district, tp.market, tp.commodity, tp.modal_price, tp.arrival_date, tp.source]
+    );
+  }
+
+  // A. Query market level: crop + state + district + market
+  const resMarket = await fetch(`${BASE_URL}/market-prices/daily-intelligence?commodity=BANANA&state=Telangana&district=Hyderabad&market=Hyderabad Mandi`);
+  const dataMarket = await resMarket.json();
+  assert.strictEqual(dataMarket.status, 'success', 'Daily intel should return success');
+  assert.strictEqual(dataMarket.scope, 'market', 'Scope should be market');
+  assert.strictEqual(parseFloat(dataMarket.todayPrice), 24, 'Today price should be normalized (2400 / 100 = 24)');
+  assert.strictEqual(parseFloat(dataMarket.yesterdayPrice), 22, 'Yesterday price should be normalized (2200 / 100 = 22)');
+  assert.strictEqual(dataMarket.difference, 2, 'Difference should be 2');
+
+  // B. Query district level: crop + state + district
+  const resDistrict = await fetch(`${BASE_URL}/market-prices/daily-intelligence?commodity=BANANA&state=Telangana&district=Hyderabad`);
+  const dataDistrict = await resDistrict.json();
+  assert.strictEqual(dataDistrict.scope, 'district', 'Scope should fallback to district');
+  assert.strictEqual(parseFloat(dataDistrict.todayPrice), 24, 'Today price should be 24');
+
+  // C. Query state level: crop + state
+  const resState = await fetch(`${BASE_URL}/market-prices/daily-intelligence?commodity=BANANA&state=Telangana`);
+  const dataState = await resState.json();
+  assert.strictEqual(dataState.scope, 'state', 'Scope should fallback to state');
+  // Today's average in Telangana: (2400 + 2500) / 2 = 2450 / 100 = 24.5
+  assert.strictEqual(parseFloat(dataState.todayPrice), 24.5, 'Today average in state should be 24.5');
+
+  // D. Query national fallback: crop + unavailable state
+  const resNational = await fetch(`${BASE_URL}/market-prices/daily-intelligence?commodity=BANANA&state=Kerala`);
+  const dataNational = await resNational.json();
+  assert.strictEqual(dataNational.scope, 'national', 'Scope should fallback to national');
+  // Today's average nationally (all 3 latest: Hyderabad, Secunderabad, Kurnool): (2400 + 2500 + 2000) / 3 = 6900 / 3 = 2300 / 100 = 23
+  assert.strictEqual(parseFloat(dataNational.todayPrice), 23, 'Today average nationally should be 23');
+
+  console.log('✅ Localized price intelligence and unit normalizations verified successfully.');
+
+  // 19. Clean up created data
   console.log('\n🧹 Cleaning up test accounts and listings...');
+  await query("DELETE FROM market_prices WHERE commodity = 'BANANA' AND source = 'mandi_api'");
   await query('DELETE FROM routes WHERE order_id = $1', [order.id]);
   await query('DELETE FROM orders WHERE id = $1', [order.id]);
   await query('DELETE FROM produce_listings WHERE id = $1', [listing.id]);

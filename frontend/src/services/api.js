@@ -86,8 +86,13 @@ export const impactAPI = {
 // Route API
 export const routeAPI = {
   getAll: () => api.get('/routes'),
-  estimate: (origin, destination) => api.post('/routes/estimate', { origin, destination }),
+  estimate: (origin, destination, vehicleType) => api.post('/routes/estimate', { origin, destination, vehicleType }),
   create: (data) => api.post('/routes', data),
+};
+
+// Vehicle API
+export const vehicleAPI = {
+  getAll: () => api.get('/vehicles'),
 };
 
 // Dashboard API
@@ -115,6 +120,13 @@ export const configAPI = {
 // Admin API
 export const adminAPI = {
   getStats: () => api.get('/admin/stats'),
+};
+
+// Notifications API
+export const notificationsAPI = {
+  getAll: () => api.get('/notifications'),
+  markAsRead: (id) => api.put(`/notifications/${id}/read`),
+  delete: (id) => api.delete(`/notifications/${id}`),
 };
 
 export default api;

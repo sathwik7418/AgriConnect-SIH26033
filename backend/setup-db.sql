@@ -4,7 +4,7 @@ CREATE TYPE commodity AS ENUM ('TOMATO', 'ONION', 'POTATO', 'WHEAT', 'RICE', 'CO
 CREATE TYPE grade AS ENUM ('GRADE_A', 'GRADE_B', 'GRADE_C', 'PREMIUM');
 CREATE TYPE listing_status AS ENUM ('ACTIVE', 'INACTIVE', 'SOLD');
 CREATE TYPE demand_status AS ENUM ('ACTIVE', 'MATCHED', 'COMPLETED', 'CANCELLED');
-CREATE TYPE order_status AS ENUM ('PENDING', 'CONFIRMED', 'IN_TRANSIT', 'DELIVERED', 'COMPLETED', 'CANCELLED');
+CREATE TYPE order_status AS ENUM ('PENDING', 'CONFIRMED', 'PICKUP_READY', 'IN_TRANSIT', 'DELIVERED', 'COMPLETED', 'CANCELLED');
 CREATE TYPE sync_status AS ENUM ('PENDING', 'SUCCESS', 'FAILED');
 CREATE TYPE validation_status AS ENUM ('VALID', 'INVALID', 'SUSPICIOUS');
 CREATE TYPE forecast_model_version AS ENUM ('DEMO', 'SYNTHETIC', 'REAL');
@@ -129,6 +129,7 @@ CREATE TABLE orders (
   net_realization DECIMAL,
   delivery_location VARCHAR(255),
   delivery_date TIMESTAMP,
+  delivery_mode VARCHAR(50) DEFAULT 'TRANSPORT_PARTNER',
   order_status order_status DEFAULT 'PENDING',
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW()
@@ -161,6 +162,27 @@ CREATE TABLE market_prices (
   validation_status validation_status DEFAULT 'VALID',
   validation_error TEXT,
   data_freshness VARCHAR(20) DEFAULT 'unknown',
+  UNIQUE(state, district, market, commodity, arrival_date)
+);
+
+CREATE TABLE historical_market_prices (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  state VARCHAR(100) NOT NULL,
+  district VARCHAR(100),
+  market VARCHAR(255) NOT NULL,
+  commodity VARCHAR(100) NOT NULL,
+  variety VARCHAR(100),
+  grade VARCHAR(50),
+  arrival_date TIMESTAMP NOT NULL,
+  min_price DECIMAL NOT NULL,
+  max_price DECIMAL NOT NULL,
+  modal_price DECIMAL,
+  source VARCHAR(50) NOT NULL DEFAULT 'agmarknet_historical',
+  fetched_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  data_period VARCHAR(50) NOT NULL DEFAULT 'agmarknet_2008_2022',
+  data_source VARCHAR(100),
+  source_record_id VARCHAR(255),
+  location VARCHAR(255),
   UNIQUE(state, district, market, commodity, arrival_date)
 );
 
@@ -216,6 +238,17 @@ CREATE TABLE impact_metrics (
   recorded_at TIMESTAMP DEFAULT NOW() NOT NULL
 );
 
+CREATE TABLE notifications (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title VARCHAR(255) NOT NULL,
+  message TEXT NOT NULL,
+  type VARCHAR(50) DEFAULT 'info',
+  related_id UUID,
+  is_read BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMP DEFAULT NOW() NOT NULL
+);
+
 -- Create indexes for performance
 CREATE INDEX idx_produce_listings_commodity ON produce_listings(commodity, state, listing_status);
 CREATE INDEX idx_produce_listings_farmer ON produce_listings(farmer_id);
@@ -227,4 +260,5 @@ CREATE INDEX idx_market_prices_commodity ON market_prices(commodity, state, dist
 CREATE INDEX idx_market_prices_freshness ON market_prices(data_freshness, fetched_at);
 CREATE INDEX idx_forecasts_commodity ON forecasts(commodity, location);
 CREATE INDEX idx_impact_metrics_type ON impact_metrics(metric_type, period_start);
+CREATE INDEX idx_notifications_user_id ON notifications(user_id, is_read);
 

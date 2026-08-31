@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { routeAPI } from '../services/api';
+import { routeAPI, vehicleAPI } from '../services/api';
 import { MapPin, Clock, Truck, DollarSign, Calculator, Info } from 'lucide-react';
 
 export default function Logistics() {
@@ -9,13 +9,27 @@ export default function Logistics() {
   const [form, setForm] = useState({ origin: '', destination: '', distanceKm: '', estimatedTime: '', estimatedCost: '', vehicleType: 'truck_1ton' });
   const [estimating, setEstimating] = useState(false);
   const [estimateError, setEstimateError] = useState('');
+  const [activeDeliveries, setActiveDeliveries] = useState(0);
+  const [upcomingPickups, setUpcomingPickups] = useState(0);
+  const [totalDistance, setTotalDistance] = useState(0);
+  const [estimatedTransportCost, setEstimatedTransportCost] = useState(0);
+  const [vehicleCatalogue, setVehicleCatalogue] = useState([]);
 
   useEffect(() => {
+    vehicleAPI.getAll().then(r => setVehicleCatalogue(r?.data || [])).catch(() => setVehicleCatalogue([]));
     loadRoutes();
   }, []);
 
   const loadRoutes = () => {
-    routeAPI.getAll().then(r => { setRoutes(r.data); setLoading(false); });
+    routeAPI.getAll().then(r => {
+      const data = r.data;
+      setRoutes(data);
+      setLoading(false);
+      setActiveDeliveries(data.length);
+      setUpcomingPickups(0);
+      setTotalDistance(data.reduce((sum, r) => sum + parseFloat(r.distance_km), 0));
+      setEstimatedTransportCost(data.reduce((sum, r) => sum + parseFloat(r.estimated_cost), 0));
+    });
   };
 
   const handleEstimate = async () => {
@@ -63,47 +77,45 @@ export default function Logistics() {
         </button>
       </div>
 
-      {/* Route Stats */}
-      {routes.length > 0 && (
-        <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-          <div className="bg-white rounded-xl p-4 card-shadow">
-            <div className="flex items-center gap-3">
-              <div className="bg-green-100 p-2 rounded-lg"><MapPin className="h-5 w-5 text-green-600" /></div>
-              <div>
-                <p className="text-xs text-gray-500">Total Routes</p>
-                <p className="text-lg font-bold">{routes.length}</p>
-              </div>
-            </div>
-          </div>
-          <div className="bg-white rounded-xl p-4 card-shadow">
-            <div className="flex items-center gap-3">
-              <div className="bg-blue-100 p-2 rounded-lg"><Truck className="h-5 w-5 text-blue-600" /></div>
-              <div>
-                <p className="text-xs text-gray-500">Vehicle Types</p>
-                <p className="text-lg font-bold">{new Set(routes.map(r => r.vehicle_type)).size}</p>
-              </div>
-            </div>
-          </div>
-          <div className="bg-white rounded-xl p-4 card-shadow">
-            <div className="flex items-center gap-3">
-              <div className="bg-amber-100 p-2 rounded-lg"><DollarSign className="h-5 w-5 text-amber-600" /></div>
-              <div>
-                <p className="text-xs text-gray-500">Avg Cost</p>
-                <p className="text-lg font-bold">Rs{Math.round(routes.reduce((a, r) => a + parseFloat(r.estimated_cost), 0) / routes.length)}</p>
-              </div>
-            </div>
-          </div>
-          <div className="bg-white rounded-xl p-4 card-shadow">
-            <div className="flex items-center gap-3">
-              <div className="bg-purple-100 p-2 rounded-lg"><Clock className="h-5 w-5 text-purple-600" /></div>
-              <div>
-                <p className="text-xs text-gray-500">Avg Distance</p>
-                <p className="text-lg font-bold">{Math.round(routes.reduce((a, r) => a + parseFloat(r.distance_km), 0) / routes.length)} km</p>
-              </div>
+      {/* Summary Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="bg-[var(--accent)] rounded-xl p-4 card-shadow">
+          <div className="flex items-center gap-3">
+            <div className="bg-[var(--info)] p-2 rounded-lg"><MapPin className="h-5 w-5 text-[var(--text-primary)]" /></div>
+            <div>
+              <p className="text-xs text-[var(--text-muted)]">Active Deliveries</p>
+              <p className="text-lg font-bold text-[var(--text-primary)]">{activeDeliveries}</p>
             </div>
           </div>
         </div>
-      )}
+        <div className="bg-[var(--info)] rounded-xl p-4 card-shadow">
+          <div className="flex items-center gap-3">
+            <div className="bg-[var(--warning)] p-2 rounded-lg"><Truck className="h-5 w-5 text-[var(--text-primary)]" /></div>
+            <div>
+              <p className="text-xs text-[var(--text-muted)]">Upcoming Pickups</p>
+              <p className="text-lg font-bold text-[var(--text-primary)]">{upcomingPickups}</p>
+            </div>
+          </div>
+        </div>
+        <div className="bg-[var(--info)] rounded-xl p-4 card-shadow">
+          <div className="flex items-center gap-3">
+            <div className="bg-[var(--accent)] p-2 rounded-lg"><Calculator className="h-5 w-5 text-[var(--text-primary)]" /></div>
+            <div>
+              <p className="text-xs text-[var(--text-muted)]">Total Distance</p>
+              <p className="text-lg font-bold text-[var(--text-primary)]">{totalDistance} km</p>
+            </div>
+          </div>
+        </div>
+        <div className="bg-[var(--info)] rounded-xl p-4 card-shadow">
+          <div className="flex items-center gap-3">
+            <div className="bg-[var(--warning)] p-2 rounded-lg"><DollarSign className="h-5 w-5 text-[var(--text-primary)]" /></div>
+            <div>
+              <p className="text-xs text-[var(--text-muted)]">Est. Transport Cost</p>
+              <p className="text-lg font-bold text-[var(--text-primary)]">Rs{estimatedTransportCost}</p>
+            </div>
+          </div>
+        </div>
+      </div>
 
       {/* Add Route Form */}
       {showAdd && (

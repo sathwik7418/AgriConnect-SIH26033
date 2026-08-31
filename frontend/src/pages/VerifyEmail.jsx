@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useLocation, useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { authAPI } from '../services/api';
-import { Sprout, Mail, RefreshCw, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { Sprout, Mail, RefreshCw, ArrowRight, Loader2, CheckCircle2 } from 'lucide-react';
 
 export default function VerifyEmail() {
   const location = useLocation();
@@ -42,9 +42,7 @@ export default function VerifyEmail() {
     try {
       await verifyEmail(email, otp);
       setSuccess('Account verified successfully! Redirecting you to your workspace...');
-      setTimeout(() => {
-        navigate('/');
-      }, 1500);
+      setTimeout(() => navigate('/'), 1500);
     } catch (err) {
       setError(err.response?.data?.error || 'Verification failed. Please check the code and try again.');
     } finally {
@@ -57,14 +55,12 @@ export default function VerifyEmail() {
       setError('Please provide an email address to resend the code');
       return;
     }
-
     setError('');
     setSuccess('');
     setResending(true);
-
     try {
       const res = await authAPI.resendVerification({ email });
-      setSuccess(res.data?.message || 'Verification code resent successfully. Please check your inbox.');
+      setSuccess(res.data?.message || 'Verification code resent. Check your inbox.');
       setCooldown(60);
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to resend verification code.');
@@ -74,81 +70,94 @@ export default function VerifyEmail() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-green-50 to-emerald-100 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-8">
-        <div className="text-center mb-8">
-          <Sprout className="h-12 w-12 text-green-600 mx-auto mb-3" />
-          <h1 className="text-2xl font-bold text-gray-900">Verify Your Email</h1>
-          <p className="text-gray-500 text-sm mt-1">Please enter the 6-digit code sent to your inbox</p>
+    <div className="min-h-screen flex items-center justify-center p-4 bg-atmospheric relative overflow-hidden">
+      <div className="w-full max-w-md animate-fade-in-up relative z-10">
+        {/* Logo */}
+        <div className="text-center mb-10">
+          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl mb-4 glow-ring animate-pulse-glow"
+            style={{ background: 'var(--accent-dim)' }}>
+            <Mail className="h-7 w-7" style={{ color: 'var(--accent)' }} />
+          </div>
+          <h1 className="text-2xl font-bold gradient-text">
+            Verify your email
+          </h1>
+          <p className="text-sm mt-1.5" style={{ color: 'var(--text-muted)' }}>
+            Enter the 6-digit code sent to your inbox
+          </p>
         </div>
 
-        <form onSubmit={handleVerify} className="space-y-5">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Email Address</label>
-            <div className="relative">
-              <Mail className="absolute left-3 top-3 h-4.5 w-4.5 text-gray-400" />
+        {/* Card */}
+        <div className="card-atmospheric hover-glow p-8">
+          <form onSubmit={handleVerify} className="space-y-5 stagger-children">
+            {error && (
+              <div className="badge badge-danger rounded-lg px-4 py-3 text-sm font-medium w-full justify-start">
+                {error}
+              </div>
+            )}
+
+            {success && (
+              <div className="badge badge-success rounded-lg px-4 py-3 text-sm font-medium flex items-center gap-2 w-full justify-start">
+                <CheckCircle2 className="h-4 w-4 shrink-0" />
+                {success}
+              </div>
+            )}
+
+            <div>
+              <label className="block text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>Email Address</label>
               <input
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 disabled={!!location.state?.email}
-                className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent bg-gray-50 disabled:bg-gray-100 disabled:text-gray-500"
+                className="input-field disabled:opacity-50"
                 required
                 placeholder="name@example.com"
               />
             </div>
-          </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Verification Code</label>
-            <input
-              type="text"
-              value={otp}
-              onChange={(e) => setOtp(e.target.value.slice(0, 6))}
-              placeholder="123456"
-              className="w-full text-center tracking-widest text-2xl font-bold px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent font-numeric"
-              required
-              maxLength={6}
-              pattern="\d{6}"
-            />
-          </div>
-
-          {error && (
-            <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg p-3 text-sm flex items-start gap-2">
-              <AlertCircle className="h-5 w-5 shrink-0 mt-0.5" />
-              <span>{error}</span>
+            <div>
+              <label className="block text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>Verification Code</label>
+              <input
+                type="text"
+                value={otp}
+                onChange={(e) => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                placeholder="123456"
+                className="input-field text-center tracking-[0.5em] text-2xl font-bold font-numeric"
+                required
+                maxLength={6}
+                pattern="\d{6}"
+                inputMode="numeric"
+              />
             </div>
-          )}
 
-          {success && (
-            <div className="bg-green-50 border border-green-200 text-green-800 rounded-lg p-3 text-sm flex items-start gap-2">
-              <CheckCircle2 className="h-5 w-5 shrink-0 mt-0.5" />
-              <span>{success}</span>
-            </div>
-          )}
+            <button
+              type="submit"
+              disabled={loading || otp.length !== 6}
+              className="btn-primary w-full flex items-center justify-center gap-2 py-3 text-[15px]"
+            >
+              {loading ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <>Verify Email <ArrowRight className="h-4 w-4" /></>
+              )}
+            </button>
+          </form>
 
-          <button
-            type="submit"
-            disabled={loading || otp.length !== 6}
-            className="w-full bg-green-600 text-white py-2.5 rounded-lg font-medium hover:bg-green-700 disabled:opacity-50 transition-colors"
-          >
-            {loading ? 'Verifying...' : 'Verify Email'}
-          </button>
-        </form>
+          <div className="mt-6 pt-5 border-t flex flex-col items-center gap-3" style={{ borderColor: 'var(--border)' }}>
+            <button
+              onClick={handleResend}
+              disabled={resending || cooldown > 0}
+              className="flex items-center gap-1.5 text-sm font-medium transition-colors disabled:opacity-40"
+              style={{ color: cooldown > 0 ? 'var(--text-muted)' : 'var(--accent)' }}
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${resending ? 'animate-spin' : ''}`} />
+              {cooldown > 0 ? `Resend code in ${cooldown}s` : 'Resend code'}
+            </button>
 
-        <div className="mt-6 flex flex-col items-center justify-center gap-3">
-          <button
-            onClick={handleResend}
-            disabled={resending || cooldown > 0}
-            className="flex items-center gap-1.5 text-sm font-semibold text-green-700 hover:text-green-800 disabled:text-gray-400 transition-colors"
-          >
-            <RefreshCw className={`h-3.5 w-3.5 ${resending ? 'animate-spin' : ''}`} />
-            {cooldown > 0 ? `Resend Code in ${cooldown}s` : 'Resend Code'}
-          </button>
-
-          <Link to="/login" className="text-sm font-medium text-gray-500 hover:text-gray-800 hover:underline">
-            Back to Sign In
-          </Link>
+            <Link to="/login" className="text-sm font-medium transition-colors hover:underline" style={{ color: 'var(--text-muted)' }}>
+              Back to sign in
+            </Link>
+          </div>
         </div>
       </div>
     </div>

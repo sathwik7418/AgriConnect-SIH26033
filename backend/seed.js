@@ -24,7 +24,7 @@ async function seed() {
   const userIds = [];
   for (const u of users) {
     const r = await query(
-      'INSERT INTO users (email, password, role, phone) VALUES ($1, $2, $3, $4) RETURNING id, role',
+      'INSERT INTO users (email, password, role, phone, is_verified) VALUES ($1, $2, $3, $4, TRUE) RETURNING id, role',
       [u.email, u.password, u.role, u.phone]
     );
     userIds.push(r.rows[0]);
