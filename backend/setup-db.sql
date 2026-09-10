@@ -224,6 +224,8 @@ CREATE TABLE routes (
   estimated_cost DECIMAL DEFAULT 0,
   vehicle_type VARCHAR(100),
   status VARCHAR(50) DEFAULT 'planned',
+  order_id UUID REFERENCES orders(id) ON DELETE CASCADE,
+  created_by UUID REFERENCES users(id) ON DELETE CASCADE,
   created_at TIMESTAMP DEFAULT NOW() NOT NULL,
   updated_at TIMESTAMP DEFAULT NOW() NOT NULL
 );
@@ -261,4 +263,53 @@ CREATE INDEX idx_market_prices_freshness ON market_prices(data_freshness, fetche
 CREATE INDEX idx_forecasts_commodity ON forecasts(commodity, location);
 CREATE INDEX idx_impact_metrics_type ON impact_metrics(metric_type, period_start);
 CREATE INDEX idx_notifications_user_id ON notifications(user_id, is_read);
+
+-- App-owned daily market history (append-only; grows over time as AgriConnect
+-- builds its own historical market-price intelligence). Never auto-deleted.
+-- `variety` is NOT NULL DEFAULT '' so a plain UNIQUE constraint preserves the
+-- commodity+market+date+variety+source identity (different varieties never
+-- overwrite each other).
+CREATE TABLE app_daily_market_history (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  state VARCHAR(100) NOT NULL,
+  district VARCHAR(100),
+  market VARCHAR(255) NOT NULL,
+  commodity VARCHAR(100) NOT NULL,
+  variety VARCHAR(100) NOT NULL DEFAULT '',
+  grade VARCHAR(50),
+  price_date DATE NOT NULL,
+  min_price DECIMAL NOT NULL,
+  max_price DECIMAL NOT NULL,
+  modal_price DECIMAL,
+  arrivals DECIMAL,
+  source VARCHAR(50) NOT NULL,
+  source_record_id VARCHAR(255),
+  sync_id UUID,
+  fetched_at TIMESTAMP DEFAULT NOW() NOT NULL,
+  CONSTRAINT uq_admh_identity UNIQUE (state, district, market, commodity, variety, price_date, source)
+);
+
+CREATE INDEX idx_admh_commodity_date ON app_daily_market_history(commodity, price_date);
+CREATE INDEX idx_admh_state_commodity ON app_daily_market_history(state, commodity, price_date);
+CREATE INDEX idx_admh_source ON app_daily_market_history(source, fetched_at);
+CREATE INDEX idx_admh_price_date ON app_daily_market_history(price_date);
+
+-- AGMARKNET reference data (migration 011): stores the AGMARKNET reference
+-- universe (states, districts, markets, commodities, varieties) for backend
+-- fallback discovery and coverage mapping. Reference/discovery only — the 605
+-- AGMARKNET commodities are never displayed as the UI-supported set.
+CREATE TABLE IF NOT EXISTS agmarknet_reference (
+  id VARCHAR(255) PRIMARY KEY,
+  ref_type VARCHAR(20) NOT NULL CHECK (ref_type IN ('state','district','market','commodity','variety','grade','group')),
+  agmarknet_id VARCHAR(50),
+  name VARCHAR(255) NOT NULL,
+  parent_type VARCHAR(20),
+  parent_id VARCHAR(50),
+  details JSONB DEFAULT '{}',
+  synced_at TIMESTAMP DEFAULT NOW() NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_agr_type ON agmarknet_reference(ref_type, name);
+CREATE INDEX IF NOT EXISTS idx_agr_parent ON agmarknet_reference(parent_type, parent_id);
+CREATE INDEX IF NOT EXISTS idx_agr_name ON agmarknet_reference(name);
 

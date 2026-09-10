@@ -25,6 +25,8 @@ function validateConfig() {
     varietyApi: { status: 'UNKNOWN', message: '' },
     historicalData: { status: 'UNKNOWN', message: '' },
     routing: { status: 'UNKNOWN', message: '' },
+    satellite: { status: 'UNKNOWN', message: '' },
+    ceda: { status: 'UNKNOWN', message: '' },
   };
 
   // Database
@@ -89,6 +91,28 @@ function validateConfig() {
     results.routing = { status: 'PARTIAL', message: `Routing provider set (${routingProvider}) but missing API key` };
   } else {
     results.routing = { status: 'MISSING', message: 'No routing provider — route suggestions disabled' };
+  }
+
+  // Satellite Crop Health (Copernicus Data Space Ecosystem - Sentinel-2 NDVI)
+  const cdseClientId = process.env.CDSE_CLIENT_ID;
+  const cdseClientSecret = process.env.CDSE_CLIENT_SECRET;
+  const cdseTokenUrl = process.env.CDSE_TOKEN_URL;
+  if (cdseClientId && cdseClientSecret && cdseTokenUrl && !isPlaceholder(cdseClientId) && !isPlaceholder(cdseClientSecret)) {
+    results.satellite = { status: 'CONFIGURED', message: 'CDSE Sentinel-2 NDVI configured' };
+  } else if (cdseClientId && !isPlaceholder(cdseClientId)) {
+    results.satellite = { status: 'PARTIAL', message: 'CDSE client configured but missing secret or token URL' };
+  } else {
+    results.satellite = { status: 'MISSING', message: 'CDSE not configured — Satellite Crop Health disabled' };
+  }
+
+  // CEDA Agmarknet - historical market price / quantity data
+  const cedaKey = process.env.CEDA_API_KEY;
+  if (cedaKey && !isPlaceholder(cedaKey)) {
+    results.ceda = { status: 'CONFIGURED', message: 'CEDA Agmarknet API configured' };
+  } else if (cedaKey && isPlaceholder(cedaKey)) {
+    results.ceda = { status: 'INVALID', message: 'CEDA_API_KEY is still a placeholder — replace it with a real key' };
+  } else {
+    results.ceda = { status: 'MISSING', message: 'CEDA Agmarknet not configured — historical market data unavailable' };
   }
 
   return results;

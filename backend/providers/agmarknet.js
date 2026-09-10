@@ -12,12 +12,12 @@ class AGMARKNETProvider {
     return true;
   }
 
-  async getStates(page = 1) {
-    const url = `${this.baseUrl}/location/state?page=${page}`;
+  async getStates(page = 1, pageSize = 100) {
+    const url = `${this.baseUrl}/location/state?page=${page}&page_size=${pageSize}`;
     try {
       const data = await this._httpGet(url);
       if (data.error) return { success: false, error: data.error, states: [] };
-      return { success: true, states: data.states || data.data || [], count: data.count || 0 };
+      return { success: true, states: data.states || data.data || [], count: data.count || data.pagination?.total_states || 0 };
     } catch (error) {
       return { success: false, error: error.message, states: [] };
     }

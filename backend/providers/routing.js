@@ -166,12 +166,40 @@ class RoutingProvider {
     }
   }
 
+  _haversineRoute(origin, destination) {
+    const R = 6371; // Earth's radius in km
+    const dLat = (destination.lat - origin.lat) * (Math.PI / 180);
+    const dLng = (destination.lng - origin.lng) * (Math.PI / 180);
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(origin.lat * (Math.PI / 180)) *
+        Math.cos(destination.lat * (Math.PI / 180)) *
+        Math.sin(dLng / 2) *
+        Math.sin(dLng / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    const directKm = R * c;
+    // Highway winding factor for Indian road corridors (approx 1.25x - 1.3x great-circle distance)
+    const roadKm = Math.max(1, Math.round(directKm * 1.28));
+    const estimatedMinutes = Math.round((roadKm / 45) * 60);
+
+    return {
+      success: true,
+      route: {
+        distanceKm: roadKm,
+        estimatedTime: `${estimatedMinutes} min`,
+        estimatedCost: 0,
+        source: 'haversine_fallback',
+      }
+    };
+  }
+
   async _osrmRoute(origin, destination) {
     const url = `https://router.project-osrm.org/route/v1/driving/${origin.lng},${origin.lat};${destination.lng},${destination.lat}?overview=false`;
     try {
       const data = await this._httpGet(url);
       if (data.code !== 'Ok' || !data.routes?.length) {
-        return { success: false, error: 'No route found', route: null };
+        console.warn('OSRM returned non-OK status, applying Haversine fallback.');
+        return this._haversineRoute(origin, destination);
       }
       const route = data.routes[0];
       return {
@@ -184,7 +212,8 @@ class RoutingProvider {
         },
       };
     } catch (error) {
-      return { success: false, error: error.message, route: null };
+      console.warn('OSRM request failed, applying Haversine fallback:', error.message);
+      return this._haversineRoute(origin, destination);
     }
   }
 
@@ -232,7 +261,7 @@ class RoutingProvider {
     }
   }
 
-  async calculateRouteDetails(originName, destinationName, vehicleType = 'PICKUP_LCV') {
+  async calculateRouteDetails(originName, destinationName, vehicleType = 'PICKUP_LCV', payloadKg = 0) {
     const origin = await this.geocode(originName);
     const destination = await this.geocode(destinationName);
     
@@ -247,6 +276,7 @@ class RoutingProvider {
     const result = await this.getRoute(origin, destination);
     if (result.success && result.route) {
       const distance = result.route.distanceKm;
+      const payload = parseFloat(payloadKg) || 0;
       const vehicle = VEHICLE_CATALOGUE[vehicleType] || VEHICLE_CATALOGUE.PICKUP_LCV;
       
       const transportCost = Math.max(300, Math.round(distance * vehicle.ratePerKm + vehicle.loadingHandling));
@@ -268,8 +298,101 @@ class RoutingProvider {
         loadingHandling: vehicle.loadingHandling,
         totalEstimate: transportCost,
       };
+
+      // Milestone 4: Add recommendation & fleet comparison
+      if (payload > 0) {
+        result.route.fleetComparison = this.compareVehicles(distance, payload, vehicle.id);
+        result.route.capacityUtilizationPct = Math.min(100, Math.round((payload / vehicle.capacityKg) * 1000) / 10);
+        result.route.remainingCapacityKg = Math.max(0, vehicle.capacityKg - payload);
+        result.route.isOversized = result.route.fleetComparison.isOversized;
+        result.route.oversizedWarning = result.route.fleetComparison.oversizedWarning;
+      }
     }
     return result;
+  }
+
+  recommendVehicle(payloadKg) {
+    const payload = parseFloat(payloadKg) || 0;
+    if (payload <= 2000) {
+      return {
+        vehicle: VEHICLE_CATALOGUE.MINI_TRUCK,
+        reason: 'Fits within 2,000 kg capacity and has the lowest transport rate (₹12/km).'
+      };
+    }
+    if (payload <= 3000) {
+      return {
+        vehicle: VEHICLE_CATALOGUE.PICKUP_LCV,
+        reason: 'Mini Truck capacity exceeded. Pickup / LCV provides 3,000 kg capacity at ₹18/km.'
+      };
+    }
+    if (payload <= 7000) {
+      return {
+        vehicle: VEHICLE_CATALOGUE.MEDIUM_TRUCK,
+        reason: 'Payload requires Medium Truck (7,000 kg capacity) for single-trip commercial logistics.'
+      };
+    }
+    return {
+      vehicle: VEHICLE_CATALOGUE.HEAVY_TRUCK,
+      reason: payload > 15000 
+        ? 'Heavy Truck (15,000 kg capacity) provides maximum payload capacity for bulk agricultural transport.'
+        : 'Payload requires Heavy Truck (15,000 kg capacity) for high-tonnage bulk freight.'
+    };
+  }
+
+  compareVehicles(distanceKm, payloadKg, selectedVehicleType = 'PICKUP_LCV') {
+    const dist = parseFloat(distanceKm) || 0;
+    const payload = parseFloat(payloadKg) || 0;
+    const recommended = this.recommendVehicle(payload);
+    const selected = VEHICLE_CATALOGUE[selectedVehicleType] || VEHICLE_CATALOGUE.PICKUP_LCV;
+    const recCost = Math.max(300, Math.round(dist * recommended.vehicle.ratePerKm + recommended.vehicle.loadingHandling));
+
+    const comparison = Object.values(VEHICLE_CATALOGUE).map(v => {
+      const isCapable = payload <= 0 || v.capacityKg >= payload;
+      const isRecommended = v.id === recommended.vehicle.id;
+      const isSelected = v.id === selected.id;
+      const cost = Math.max(300, Math.round(dist * v.ratePerKm + v.loadingHandling));
+      const costDiff = cost - recCost;
+      const utilization = payload > 0 ? Math.min(100, Math.round((payload / v.capacityKg) * 1000) / 10) : 0;
+      const remainingKg = Math.max(0, v.capacityKg - payload);
+
+      let disqualificationReason = null;
+      if (!isCapable) {
+        disqualificationReason = `Payload (${payload.toLocaleString()} kg) exceeds vehicle capacity (${v.capacityKg.toLocaleString()} kg)`;
+      }
+
+      return {
+        id: v.id,
+        label: v.label,
+        description: v.description,
+        capacityKg: v.capacityKg,
+        ratePerKm: v.ratePerKm,
+        loadingHandling: v.loadingHandling,
+        estimatedCost: cost,
+        costDifference: costDiff,
+        isCapable,
+        isRecommended,
+        isSelected,
+        capacityUtilizationPct: utilization,
+        remainingCapacityKg: remainingKg,
+        disqualificationReason
+      };
+    });
+
+    const isOversized = payload > 0 && selected.capacityKg > recommended.vehicle.capacityKg && selected.id !== recommended.vehicle.id;
+    const selectedCost = Math.max(300, Math.round(dist * selected.ratePerKm + selected.loadingHandling));
+    const potentialSavings = isOversized ? Math.max(0, selectedCost - recCost) : 0;
+
+    return {
+      distanceKm: dist,
+      payloadKg: payload,
+      recommendedVehicle: recommended.vehicle,
+      recommendationReason: recommended.reason,
+      selectedVehicle: selected,
+      isOversized,
+      potentialSavings,
+      oversizedWarning: isOversized ? `You're using a larger vehicle (${selected.label}) than necessary. Switching to ${recommended.vehicle.label} could save ₹${potentialSavings.toLocaleString()}.` : null,
+      vehicles: comparison
+    };
   }
 
   calculateTransportCost(distanceKm, vehicleType = 'PICKUP_LCV') {
@@ -305,7 +428,7 @@ class RoutingProvider {
         headers: {
           'User-Agent': 'AgriConnect-SIH26033/1.0 (Contact: vamshi@agriconnect.org)'
         },
-        timeout: 10000
+        timeout: 3500
       };
       
       const req = client.get(options, (res) => {

@@ -2,6 +2,10 @@ const https = require('https');
 const http = require('http');
 const { query } = require('../db');
 
+// CEDA is NEVER a current-price source. Any attempt to write CEDA data into the
+// current prices table is rejected at the provider boundary (hard guard).
+const CEDA_MARKERS = ['ceda', 'historical'];
+
 class MandiProvider {
   constructor() {
     this.name = 'mandi';
@@ -20,28 +24,46 @@ class MandiProvider {
       return { success: false, error: 'Mandi API not configured', records: [], source: 'unavailable' };
     }
 
-    const params = new URLSearchParams({
-      'api-key': this.apiKey,
-      format: this.format,
-      ...(filters.state && { 'filters[state]': filters.state }),
-      ...(filters.commodity && { 'filters[commodity]': filters.commodity.toUpperCase() }),
-      ...(filters.district && { 'filters[district]': filters.district }),
-      limit: filters.limit || 500,
-    });
+    const allRecords = [];
+    const pageLimit = Math.min(filters.limit || 5000, 5000);
+    let offset = 0;
+    const maxPages = 10; // Safety cap: 10 pages × 5000 = 50K records max
 
-    const url = `${this.apiUrl}/resource/${this.resourceId}?${params.toString()}`;
+    for (let page = 0; page < maxPages; page++) {
+      const params = new URLSearchParams({
+        'api-key': this.apiKey,
+        format: this.format,
+        ...(filters.state && { 'filters[state]': filters.state }),
+        ...(filters.commodity && { 'filters[commodity]': filters.commodity.toUpperCase() }),
+        ...(filters.district && { 'filters[district]': filters.district }),
+        limit: pageLimit,
+        offset: offset,
+      });
 
-    try {
-      const data = await this._httpGet(url);
-      if (data.error) {
-        return { success: false, error: data.error, records: [], source: 'mandi_api' };
+      const url = `${this.apiUrl}/resource/${this.resourceId}?${params.toString()}`;
+
+      try {
+        const data = await this._httpGet(url);
+        if (data.error) {
+          if (page === 0) return { success: false, error: data.error, records: [], source: 'mandi_api' };
+          break;
+        }
+        const pageRecords = (data.records || []).map(r => this._normalizeRecord(r));
+        allRecords.push(...pageRecords);
+
+        // If fewer records than limit, we've fetched all available data
+        if (pageRecords.length < pageLimit) break;
+        offset += pageLimit;
+      } catch (error) {
+        if (page === 0) {
+          console.error('Mandi API error:', error.message);
+          return { success: false, error: error.message, records: [], source: 'mandi_api' };
+        }
+        break;
       }
-      const records = (data.records || []).map(r => this._normalizeRecord(r));
-      return { success: true, records, source: 'mandi_api', fetchedAt: new Date() };
-    } catch (error) {
-      console.error('Mandi API error:', error.message);
-      return { success: false, error: error.message, records: [], source: 'mandi_api' };
     }
+
+    return { success: allRecords.length > 0, records: allRecords, source: 'mandi_api', fetchedAt: new Date() };
   }
 
   _normalizeRecord(raw) {
@@ -70,11 +92,23 @@ class MandiProvider {
     return isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
   }
 
+  _guardNotCeda(source, context) {
+    if (!source) return;
+    const s = String(source).toLowerCase();
+    if (CEDA_MARKERS.includes(s)) {
+      const msg = `[CEDA_HARD_GUARD] Blocked attempt to write CEDA data as current price. source="${source}" context="${context}"`;
+      console.error(msg);
+      throw new Error(msg);
+    }
+  }
+
   async storeRecords(records, syncId) {
     let stored = 0;
     let skipped = 0;
 
     for (const r of records) {
+      // CEDA hard guard: never allow CEDA/historical rows to enter current prices.
+      this._guardNotCeda('mandi_api', `${r.commodity || ''}/${r.market || ''}`);
       try {
         await query(
           `INSERT INTO market_prices (state, district, market, commodity, variety, grade, arrival_date, min_price, max_price, modal_price, source, fetched_at, data_freshness, source_record_id, sync_id)
@@ -83,12 +117,15 @@ class MandiProvider {
              min_price = EXCLUDED.min_price,
              max_price = EXCLUDED.max_price,
              modal_price = EXCLUDED.modal_price,
+             variety = COALESCE(EXCLUDED.variety, market_prices.variety),
              fetched_at = NOW(),
              data_freshness = 'fresh'`,
           [r.state, r.district, r.market, r.commodity, r.variety, r.grade, r.arrivalDate, r.minPrice, r.maxPrice, r.modalPrice, null, syncId]
         );
         stored++;
       } catch (err) {
+        // CEDA guard failures must never be silently swallowed.
+        if (String(err.message || '').includes('CEDA_HARD_GUARD')) throw err;
         skipped++;
         if (skipped <= 3) console.warn('Store record error:', err.message);
       }
