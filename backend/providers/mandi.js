@@ -121,6 +121,20 @@ class MandiProvider {
     'OTHER'
   ];
 
+  const commodityCounts = {};
+
+for (const r of records) {
+  commodityCounts[r.commodity] =
+    (commodityCounts[r.commodity] || 0) + 1;
+}
+
+console.log(
+  '[MANDI AUTO SYNC] Commodities received:',
+  Object.entries(commodityCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 30)
+);
+
     for (const r of records) {
   // CEDA hard guard: never allow CEDA/historical rows to enter current prices.
   this._guardNotCeda('mandi_api', `${r.commodity || ''}/${r.market || ''}`);
