@@ -3,6 +3,7 @@ import { useAuth } from '../context/AuthContext';
 import { Sprout, ShoppingCart, BarChart3, Truck, Activity, LogOut, Menu, X, Home, ShoppingBag, Bell, ChevronRight, Shield, Trash2, Inbox } from 'lucide-react';
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { notificationsAPI } from '../services/api';
+import AIBot from './AIBot/AIBot';
 
 const MemoizedOutlet = React.memo(Outlet);
 
@@ -486,6 +487,7 @@ export default function Layout() {
         <main className="flex-1 px-4 sm:px-6 lg:px-8 py-6 max-w-[1400px] w-full mx-auto">
           <MemoizedOutlet />
         </main>
+        <AIBot />
       </div>
     </div>
   );
