@@ -122,9 +122,16 @@ class MandiProvider {
   ];
 
     for (const r of records) {
-      // CEDA hard guard: never allow CEDA/historical rows to enter current prices.
-      this._guardNotCeda('mandi_api', `${r.commodity || ''}/${r.market || ''}`);
-      try {
+  // CEDA hard guard: never allow CEDA/historical rows to enter current prices.
+  this._guardNotCeda('mandi_api', `${r.commodity || ''}/${r.market || ''}`);
+
+  // Skip commodities that are not supported by our database enum.
+  if (!allowedCommodities.includes(r.commodity)) {
+    skipped++;
+    continue;
+  }
+
+  try {
         await query(
           `INSERT INTO market_prices (state, district, market, commodity, variety, grade, arrival_date, min_price, max_price, modal_price, source, fetched_at, data_freshness, source_record_id, sync_id)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'mandi_api',NOW(),'fresh',$11,$12)
