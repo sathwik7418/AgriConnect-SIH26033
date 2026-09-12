@@ -46,8 +46,6 @@ const cropImages = {
   CORN: cornImage,
   BRINJAL: brinjalImage,
   APPLE: appleImage,
-
-  // These files don't currently exist
   WHEAT: tomatoImage,
   RICE: tomatoImage,
   LETTUCE: tomatoImage,
