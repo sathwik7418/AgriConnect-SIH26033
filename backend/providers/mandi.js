@@ -106,6 +106,21 @@ class MandiProvider {
     let stored = 0;
     let skipped = 0;
 
+    const allowedCommodities = [
+    'TOMATO',
+    'ONION',
+    'POTATO',
+    'WHEAT',
+    'RICE',
+    'CORN',
+    'BRINJAL',
+    'LETTUCE',
+    'MANGO',
+    'APPLE',
+    'BANANA',
+    'OTHER'
+  ];
+
     for (const r of records) {
       // CEDA hard guard: never allow CEDA/historical rows to enter current prices.
       this._guardNotCeda('mandi_api', `${r.commodity || ''}/${r.market || ''}`);
