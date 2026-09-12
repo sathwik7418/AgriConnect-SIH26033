@@ -1893,10 +1893,99 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
+let mandiSyncRunning = false;
+
+async function runAutomaticMandiSync() {
+  if (mandiSyncRunning || !mandiProvider.isConfigured()) {
+    return;
+  }
+
+  mandiSyncRunning = true;
+  let syncId = null;
+
+  try {
+    const syncResult = await query(
+      `INSERT INTO market_data_sync (source, sync_status)
+       VALUES ($1, $2)
+       RETURNING id`,
+      ['mandi_api', 'PENDING']
+    );
+
+    syncId = syncResult.rows[0].id;
+
+    // Fetch current Mandi data without commodity filtering
+    // to avoid case-sensitive commodity filter issues.
+    const result = await mandiProvider.fetchPrices({
+      limit: 5000
+    });
+
+    if (!result.success) {
+      throw new Error(result.error || 'Mandi API returned no records');
+    }
+
+    const storeResult = await mandiProvider.storeRecords(
+      result.records,
+      syncId
+    );
+
+    await query(
+      `UPDATE market_data_sync
+       SET sync_status = $1,
+           record_count = $2,
+           valid_count = $3,
+           completed_at = NOW()
+       WHERE id = $4`,
+      [
+        'SUCCESS',
+        storeResult.total,
+        storeResult.stored,
+        syncId
+      ]
+    );
+
+    console.log(
+      `[MANDI AUTO SYNC] Stored ${storeResult.stored}/${storeResult.total} records`
+    );
+
+  } catch (error) {
+    console.error('[MANDI AUTO SYNC] Failed:', error.message);
+
+    if (syncId) {
+      await query(
+        `UPDATE market_data_sync
+         SET sync_status = 'FAILED',
+             error_message = $1,
+             completed_at = NOW()
+         WHERE id = $2`,
+        [error.message, syncId]
+      ).catch(err =>
+        console.error(
+          '[MANDI AUTO SYNC] Failed to update sync status:',
+          err.message
+        )
+      );
+    }
+
+  } finally {
+    mandiSyncRunning = false;
+  }
+}
+
 app.listen(PORT, () => {
   console.log(`SIH26033 Server running on port ${PORT}`);
   console.log(`Health check: http://localhost:${PORT}/health`);
   console.log(`API base: http://localhost:${PORT}/api`);
 });
+
+if (mandiProvider.isConfigured()) {
+  console.log('[MANDI AUTO SYNC] Starting initial sync in 5 seconds...');
+
+  setTimeout(runAutomaticMandiSync, 5000);
+
+  setInterval(
+    runAutomaticMandiSync,
+    6 * 60 * 60 * 1000
+  );
+}
 
 module.exports = app;
