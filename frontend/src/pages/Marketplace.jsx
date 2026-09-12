@@ -1,3 +1,9 @@
+import tomatoImage from '../assets/crops/tomato.jpg';
+import onionImage from '../assets/crops/onion.jpg';
+import potatoImage from '../assets/crops/potato.jpg';
+import cornImage from '../assets/crops/corn.jpg';
+import brinjalImage from '../assets/crops/brinjal.jpg';
+import appleImage from '../assets/crops/apple.jpg';
 import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import {
@@ -32,23 +38,21 @@ import {
 // Other images are referenced as paths so missing files
 // do NOT break the Vite build.
 
-import tomatoImage from '../assets/crops/tomato.jpg';
 
 const cropImages = {
   TOMATO: tomatoImage,
+  ONION: onionImage,
+  POTATO: potatoImage,
+  CORN: cornImage,
+  BRINJAL: brinjalImage,
+  APPLE: appleImage,
 
-  // Add these files later inside:
-  // src/assets/crops/
-  ONION: '/src/assets/crops/onion.jpg',
-  POTATO: '/src/assets/crops/potato.jpg',
-  WHEAT: '/src/assets/crops/wheat.jpg',
-  RICE: '/src/assets/crops/rice.jpg',
-  CORN: '/src/assets/crops/corn.jpg',
-  BRINJAL: '/src/assets/crops/brinjal.jpg',
-  LETTUCE: '/src/assets/crops/lettuce.jpg',
-  MANGO: '/src/assets/crops/mango.jpg',
-  APPLE: '/src/assets/crops/apple.jpg',
-  BANANA: '/src/assets/crops/banana.jpg',
+  // These files don't currently exist
+  WHEAT: tomatoImage,
+  RICE: tomatoImage,
+  LETTUCE: tomatoImage,
+  MANGO: tomatoImage,
+  BANANA: tomatoImage,
 
   OTHER: tomatoImage,
 };
